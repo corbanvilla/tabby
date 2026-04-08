@@ -5,6 +5,8 @@
 # Architecture: 1 daemon per session + 1 renderer per window
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
 
 SPAWNING=$(tmux show-option -gqv @tabby_spawning 2>/dev/null || echo "")
 if [ "$SPAWNING" = "1" ]; then

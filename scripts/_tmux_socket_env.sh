@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+# Ensure Tabby processes consistently target the intended tmux server.
+# Supports explicit override via TABBY_TMUX_SOCKET.
+
+tabby_init_tmux_socket_env() {
+    local current_dir="${1:-}"
+    local wrapper_path=""
+    local resolved=""
+
+    if [ -n "$current_dir" ]; then
+        wrapper_path="$current_dir/bin/tmux"
+    fi
+
+    if [ -z "${TABBY_TMUX_REAL:-}" ]; then
+        for candidate in /usr/bin/tmux /opt/homebrew/bin/tmux /usr/local/bin/tmux; do
+            if [ -x "$candidate" ]; then
+                resolved="$candidate"
+                break
+            fi
+        done
+        if [ -z "$resolved" ]; then
+            resolved="$(command -v tmux 2>/dev/null || true)"
+        fi
+        if [ -n "$resolved" ] && [ -n "$wrapper_path" ]; then
+            if [ "$(readlink -f "$resolved" 2>/dev/null || echo "$resolved")" = "$(readlink -f "$wrapper_path" 2>/dev/null || echo "$wrapper_path")" ]; then
+                resolved=""
+            fi
+        fi
+        if [ -z "$resolved" ]; then
+            resolved="/usr/bin/tmux"
+        fi
+        TABBY_TMUX_REAL="$resolved"
+        export TABBY_TMUX_REAL
+    fi
+
+    if [ -n "$current_dir" ] && [ -d "$current_dir/bin" ]; then
+        case ":$PATH:" in
+            *":$current_dir/bin:"*) ;;
+            *) export PATH="$current_dir/bin:$PATH" ;;
+        esac
+    fi
+
+    if [ -z "${TABBY_TMUX_SOCKET:-}" ]; then
+        local socket_path
+        socket_path="$(tmux display-message -p '#{socket_path}' 2>/dev/null || true)"
+        if [ -n "$socket_path" ]; then
+            export TABBY_TMUX_SOCKET="$socket_path"
+        fi
+    fi
+}

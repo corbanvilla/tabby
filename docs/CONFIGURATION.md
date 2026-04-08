@@ -4,6 +4,7 @@
 
 - [Example Config](#example-config)
 - [Sidebar Position and Mode](#sidebar-position-and-mode)
+- [Custom tmux Socket](#custom-tmux-socket)
 - [Tips](#tips)
 
 ## Example Config
@@ -94,6 +95,18 @@ After changing position or mode, toggle the sidebar off and on to apply:
 ```bash
 # prefix + Tab (twice) to toggle off then on
 ```
+
+## Custom tmux Socket
+
+If you run tmux on a non-default socket, set `TABBY_TMUX_SOCKET` so Tabby
+commands and daemons consistently target the same server:
+
+```bash
+export TABBY_TMUX_SOCKET=/path/to/tmux.sock
+```
+
+Tabby will run tmux commands as `tmux -S "$TABBY_TMUX_SOCKET" ...` when this
+environment variable is present.
 
 ## Tips
 

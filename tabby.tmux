@@ -3,6 +3,25 @@
 # Fixes: BUG-003 (hook signal targeting)
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
+
+# Propagate socket override/runtime hints into tmux session environment so
+# run-shell hooks and spawned panes stay pinned to the intended server.
+if [ -n "${TABBY_TMUX_SOCKET:-}" ]; then
+    tmux set-environment -g TABBY_TMUX_SOCKET "$TABBY_TMUX_SOCKET"
+fi
+if [ -n "${TABBY_TMUX_REAL:-}" ]; then
+    tmux set-environment -g TABBY_TMUX_REAL "$TABBY_TMUX_REAL"
+fi
+SERVER_PATH="$(tmux show-environment -g PATH 2>/dev/null | sed -n 's/^PATH=//p')"
+if [ -z "$SERVER_PATH" ]; then
+    SERVER_PATH="$PATH"
+fi
+case ":$SERVER_PATH:" in
+    *":$CURRENT_DIR/bin:"*) ;;
+    *) tmux set-environment -g PATH "$CURRENT_DIR/bin:$SERVER_PATH" ;;
+esac
 
 # Resolve config path via XDG helper (never read $CURRENT_DIR/config.yaml directly)
 source "$CURRENT_DIR/scripts/_config_path.sh"

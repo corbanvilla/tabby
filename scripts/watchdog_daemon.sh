@@ -15,6 +15,8 @@ set -u
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
 DAEMON_BIN="$CURRENT_DIR/bin/tabby-daemon"
 CRASH_HOOK="$CURRENT_DIR/scripts/crash-handler.sh"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
 
 MAX_RESTARTS=5
 RESTART_WINDOW=60   # seconds — reset restart counter after this
