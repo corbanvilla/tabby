@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -eu
+
+SELF_REAL="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+
+resolve_real_tmux() {
+    if [ -n "${TABBY_TMUX_REAL:-}" ] && [ -x "${TABBY_TMUX_REAL:-}" ]; then
+        echo "$TABBY_TMUX_REAL"
+        return
+    fi
+
+    for candidate in /usr/bin/tmux /opt/homebrew/bin/tmux /usr/local/bin/tmux; do
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return
+        fi
+    done
+
+    local discovered discovered_real
+    discovered="$(command -v tmux 2>/dev/null || true)"
+    if [ -n "$discovered" ]; then
+        discovered_real="$(readlink -f "$discovered" 2>/dev/null || echo "$discovered")"
+        if [ "$discovered_real" != "$SELF_REAL" ]; then
+            echo "$discovered"
+            return
+        fi
+    fi
+
+    echo "tmux"
+}
+
+REAL_TMUX="$(resolve_real_tmux)"
+
+if [ -n "${TABBY_TMUX_SOCKET:-}" ]; then
+    exec "$REAL_TMUX" -S "$TABBY_TMUX_SOCKET" "$@"
+fi
+
+exec "$REAL_TMUX" "$@"
