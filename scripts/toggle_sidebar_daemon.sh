@@ -37,6 +37,29 @@ reset_mouse_escape_sequences() {
     done
 }
 
+spawn_missing_renderers_fallback() {
+    local debug_flag=""
+    if [ "${TABBY_DEBUG:-}" = "1" ]; then
+        debug_flag="-debug"
+    fi
+
+    while IFS= read -r window_id; do
+        [ -z "$window_id" ] && continue
+
+        has_renderer=$(tmux list-panes -t "$window_id" -F "#{pane_current_command}|#{pane_start_command}" 2>/dev/null | \
+            grep -qE "(sidebar-renderer|sidebar)" && echo "yes" || echo "no")
+        if [ "$has_renderer" = "yes" ]; then
+            continue
+        fi
+
+        first_pane=$(tmux list-panes -t "$window_id" -F "#{pane_id}" 2>/dev/null | head -n1)
+        [ -z "$first_pane" ] && continue
+
+        cmd_str="printf '\\033[?25l\\033[2J\\033[H' && exec '$RENDERER_BIN' -session '$SESSION_ID' -window '$window_id' $debug_flag"
+        tmux split-window -d -t "$first_pane" -h -b -f -l "$SIDEBAR_WIDTH" "$cmd_str" 2>/dev/null || true
+    done < <(tmux list-windows -t "$SESSION_ID" -F "#{window_id}" 2>/dev/null || true)
+}
+
 restart_daemon_if_unresponsive() {
     if [ ! -f "$DAEMON_PID_FILE" ] || [ ! -S "$DAEMON_SOCK" ]; then
         return
@@ -278,6 +301,9 @@ else
     TRACK_WINDOW_HISTORY_SCRIPT="$CURRENT_DIR/scripts/track_window_history.sh"
     CYCLE_PANE_BIN="$CURRENT_DIR/bin/cycle-pane"
     tmux set-hook -g after-select-window "run-shell '$ON_WINDOW_SELECT_SCRIPT'; run-shell '$REFRESH_STATUS_SCRIPT'; run-shell -b '$TRACK_WINDOW_HISTORY_SCRIPT'; run-shell -b '$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\"'; run-shell -b '$STATUS_GUARD_SCRIPT \"#{session_id}\"'; run-shell -b '[ -x \"$CYCLE_PANE_BIN\" ] && \"$CYCLE_PANE_BIN\" --dim-only'"
+
+    # Fallback spawn: if daemon auto-spawn lags or misses a window, force renderer panes now.
+    spawn_missing_renderers_fallback
 
     # Brief wait for daemon to start spawning renderers, then let it work asynchronously.
     # The daemon will spawn renderers via its ticker loop, and ensure_sidebar.sh will

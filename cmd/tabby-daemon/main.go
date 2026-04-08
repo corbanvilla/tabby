@@ -345,8 +345,10 @@ func spawnRenderersForNewWindows(server *daemon.Server, sessionID string, window
 	}
 	rendererBin := getRendererBin()
 	if rendererBin == "" {
+		logEvent("SPAWN_SKIP reason=renderer_bin_missing windows=%d session=%s", len(windows), sessionID)
 		return false
 	}
+	logEvent("SPAWN_START session=%s windows=%d renderer=%s", sessionID, len(windows), rendererBin)
 	spawned := false
 
 	// Use coordinator's globalWidth for consistency with RunWidthSync.
@@ -1196,13 +1198,13 @@ func updateHeaderBorderStyles(coordinator *Coordinator) {
 // so they can be restored after daemon startup completes
 func saveFocusState(sessionID string) {
 	// Get current window and pane
-	windowOut, err := exec.Command("tmux", "display-message", "-p", "#{window_id}").Output()
+	windowOut, err := exec.Command("tmux", "display-message", "-p", "-t", sessionID, "#{window_id}").Output()
 	if err != nil {
 		return
 	}
 	currentWindow := strings.TrimSpace(string(windowOut))
 
-	paneOut, err := exec.Command("tmux", "display-message", "-p", "#{pane_id}").Output()
+	paneOut, err := exec.Command("tmux", "display-message", "-p", "-t", sessionID, "#{pane_id}").Output()
 	if err != nil {
 		return
 	}
