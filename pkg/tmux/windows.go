@@ -43,6 +43,15 @@ func stripANSI(s string) string {
 	return ansiEscapeRegex.ReplaceAllString(s, "")
 }
 
+// tmux escapes non-printable delimiter bytes as octal sequences (for example \037)
+// on some versions/configurations. Accept both raw \x1f and escaped \037 forms.
+func splitTmuxFields(line string) []string {
+	if strings.Contains(line, `\037`) && !strings.Contains(line, "\x1f") {
+		line = strings.ReplaceAll(line, `\037`, "\x1f")
+	}
+	return strings.Split(line, "\x1f")
+}
+
 type Pane struct {
 	ID           string
 	Index        int
@@ -87,10 +96,32 @@ var aiToolCommands = map[string]bool{}
 var aiIdleTimeout int64 = 10
 
 var sessionTarget string
+var sessionTargetCanonicalID string
+
+func normalizeSessionID(v string) string {
+	return strings.TrimPrefix(strings.TrimSpace(v), "$")
+}
+
+func resolveSessionCanonicalID(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ""
+	}
+	out, err := tmuxOutput("display-message", "-p", "-t", target, "#{session_id}")
+	if err != nil {
+		return ""
+	}
+	return normalizeSessionID(string(out))
+}
 
 // SetSessionTarget scopes tmux queries to a specific session.
 func SetSessionTarget(sessionID string) {
 	sessionTarget = strings.TrimSpace(sessionID)
+	sessionTargetCanonicalID = resolveSessionCanonicalID(sessionTarget)
+}
+
+func legacyWindowIndexKey(idx string) string {
+	return "#idx:" + strings.TrimSpace(idx)
 }
 
 // ConfigureBusyDetection applies user config to idle/busy detection.
@@ -298,12 +329,16 @@ func ListWindows() ([]Window, error) {
 	}
 
 	var windows []Window
+	normalizedFilterTarget := normalizeSessionID(sessionTargetCanonicalID)
+	if normalizedFilterTarget == "" {
+		normalizedFilterTarget = normalizeSessionID(sessionTarget)
+	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		parts := strings.Split(line, "\x1f")
+		parts := splitTmuxFields(line)
 		if len(parts) < 8 {
 			continue
 		}
@@ -396,7 +431,8 @@ func ListWindows() ([]Window, error) {
 		// tmux list-windows -t $SESSION can transiently return wrong-session windows.
 		if sessionTarget != "" && len(parts) >= 19 {
 			winSessionID := strings.TrimSpace(parts[18])
-			if winSessionID != "" && winSessionID != sessionTarget {
+			normalizedWinSessionID := normalizeSessionID(winSessionID)
+			if winSessionID != "" && normalizedFilterTarget != "" && normalizedWinSessionID != normalizedFilterTarget {
 				continue
 			}
 		}
@@ -452,7 +488,7 @@ func ListPanesForWindow(windowIndex int) ([]Pane, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.Split(line, "\x1f")
+		parts := splitTmuxFields(line)
 		if len(parts) < 5 {
 			continue
 		}
@@ -521,8 +557,8 @@ func ListPanesForWindow(windowIndex int) ([]Pane, error) {
 		}
 
 		collapsed := false
-		if len(parts) >= 11 {
-			collapsedVal := strings.TrimSpace(parts[10])
+		if len(parts) >= 12 {
+			collapsedVal := strings.TrimSpace(parts[11])
 			collapsed = collapsedVal == "1" || strings.EqualFold(collapsedVal, "true")
 		}
 		panes = append(panes, Pane{
@@ -548,7 +584,7 @@ func ListPanesForWindow(windowIndex int) ([]Pane, error) {
 
 // ListAllPanes returns all panes across all windows in a single tmux command
 // This is more efficient than calling ListPanesForWindow for each window (N+1 problem)
-func ListAllPanes() (map[int][]Pane, error) {
+func ListAllPanes() (map[string][]Pane, error) {
 	t := perf.Start("tmux.ListAllPanes")
 	defer t.Stop()
 
@@ -562,7 +598,7 @@ func ListAllPanes() (map[int][]Pane, error) {
 		args = append(args, "-a")
 	}
 	args = append(args, "-F",
-		"#{window_index}\x1f#{pane_id}\x1f#{pane_index}\x1f#{pane_active}\x1f#{pane_current_command}\x1f#{pane_title}\x1f#{pane_pid}\x1f#{pane_last_activity}\x1f#{@tabby_pane_title}\x1f#{pane_top}\x1f#{pane_left}\x1f#{pane_current_path}\x1f#{@tabby_pane_collapsed}\x1f#{@tabby_pane_prev_height}\x1f#{pane_start_command}\x1f#{pane_width}\x1f#{pane_height}")
+		"#{window_id}\x1f#{window_index}\x1f#{pane_id}\x1f#{pane_index}\x1f#{pane_active}\x1f#{pane_current_command}\x1f#{pane_title}\x1f#{pane_pid}\x1f#{pane_last_activity}\x1f#{@tabby_pane_title}\x1f#{pane_top}\x1f#{pane_left}\x1f#{pane_current_path}\x1f#{@tabby_pane_collapsed}\x1f#{@tabby_pane_prev_height}\x1f#{pane_start_command}\x1f#{pane_width}\x1f#{pane_height}")
 	out, err := DefaultRunner.Run(args...)
 	if err != nil {
 		return nil, err
@@ -570,49 +606,69 @@ func ListAllPanes() (map[int][]Pane, error) {
 
 	myPID := fmt.Sprintf("%d", os.Getpid())
 	now := time.Now().Unix()
-	result := make(map[int][]Pane)
+	result := make(map[string][]Pane)
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		parts := strings.Split(line, "\x1f")
-		if len(parts) < 6 {
+		parts := splitTmuxFields(line)
+		if len(parts) < 17 {
 			continue
 		}
 
-		windowIdx, err := strconv.Atoi(parts[0])
-		if err != nil {
+		// Preferred format includes window_id as field 0.
+		// Fallback format (legacy/tests) omits window_id and starts with window_index.
+		newFormat := len(parts) >= 18
+		windowID := ""
+		var paneIDField, paneIndexField, paneActiveField int
+		var cmdField, titleField, pidField, lastActivityField int
+		var lockedTitleField, topField, leftField, pathField int
+		var collapsedField, startCommandField, widthField, heightField int
+		if newFormat {
+			windowID = strings.TrimSpace(parts[0])
+			paneIDField, paneIndexField, paneActiveField = 2, 3, 4
+			cmdField, titleField, pidField, lastActivityField = 5, 6, 7, 8
+			lockedTitleField, topField, leftField, pathField = 9, 10, 11, 12
+			collapsedField, startCommandField, widthField, heightField = 13, 15, 16, 17
+		} else {
+			windowID = legacyWindowIndexKey(parts[0])
+			paneIDField, paneIndexField, paneActiveField = 1, 2, 3
+			cmdField, titleField, pidField, lastActivityField = 4, 5, 6, 7
+			lockedTitleField, topField, leftField, pathField = 8, 9, 10, 11
+			collapsedField, startCommandField, widthField, heightField = 12, 14, 15, 16
+		}
+		if windowID == "" {
 			continue
 		}
-		paneIdx, err := strconv.Atoi(parts[2])
+		paneIdx, err := strconv.Atoi(parts[paneIndexField])
 		if err != nil {
 			continue
 		}
 
 		// Skip sidebar/daemon panes by command name
-		cmd := parts[4]
+		cmd := parts[cmdField]
 		startCommand := ""
-		if len(parts) >= 15 {
-			startCommand = parts[14]
+		if len(parts) > startCommandField {
+			startCommand = parts[startCommandField]
 		}
 		if isSidebarCommand(cmd) || isSidebarCommand(startCommand) {
 			continue
 		}
 		// Skip our own pane
-		if len(parts) >= 7 && parts[6] == myPID {
+		if len(parts) > pidField && parts[pidField] == myPID {
 			continue
 		}
 
-		command := stripANSI(parts[4])
+		command := stripANSI(parts[cmdField])
 		isRemote := remoteCommands[command]
 		busy := isPaneBusy(command)
 
 		// Parse last activity timestamp
 		var lastActivityTS int64
-		if len(parts) >= 8 {
-			lastActivityTS, _ = strconv.ParseInt(parts[7], 10, 64)
+		if len(parts) > lastActivityField {
+			lastActivityTS, _ = strconv.ParseInt(parts[lastActivityField], 10, 64)
 		}
 
 		// For remote connections, check if there's been activity in the last 3 seconds
@@ -621,47 +677,47 @@ func ListAllPanes() (map[int][]Pane, error) {
 		}
 
 		lockedTitle := ""
-		if len(parts) >= 9 {
-			lockedTitle = strings.TrimSpace(parts[8])
+		if len(parts) > lockedTitleField {
+			lockedTitle = strings.TrimSpace(parts[lockedTitleField])
 		}
 
 		top := 0
-		if len(parts) >= 10 {
-			top, _ = strconv.Atoi(parts[9])
+		if len(parts) > topField {
+			top, _ = strconv.Atoi(parts[topField])
 		}
 
 		left := 0
-		if len(parts) >= 11 {
-			left, _ = strconv.Atoi(parts[10])
+		if len(parts) > leftField {
+			left, _ = strconv.Atoi(parts[leftField])
 		}
 
 		currentPath := ""
-		if len(parts) >= 12 {
-			currentPath = parts[11]
+		if len(parts) > pathField {
+			currentPath = parts[pathField]
 		}
 
 		panePID := 0
-		if len(parts) >= 7 {
-			panePID, _ = strconv.Atoi(parts[6])
+		if len(parts) > pidField {
+			panePID, _ = strconv.Atoi(parts[pidField])
 		}
 
 		width := 0
-		if len(parts) >= 16 {
-			width, _ = strconv.Atoi(parts[15])
+		if len(parts) > widthField {
+			width, _ = strconv.Atoi(parts[widthField])
 		}
 
 		height := 0
-		if len(parts) >= 17 {
-			height, _ = strconv.Atoi(parts[16])
+		if len(parts) > heightField {
+			height, _ = strconv.Atoi(parts[heightField])
 		}
 
 		pane := Pane{
-			ID:           parts[1],
+			ID:           parts[paneIDField],
 			Index:        paneIdx,
-			Active:       parts[3] == "1",
+			Active:       parts[paneActiveField] == "1",
 			Command:      command,
 			StartCommand: startCommand,
-			Title:        stripANSI(parts[5]),
+			Title:        stripANSI(parts[titleField]),
 			LockedTitle:  lockedTitle,
 			Busy:         busy,
 			Remote:       isRemote,
@@ -673,14 +729,14 @@ func ListAllPanes() (map[int][]Pane, error) {
 			LastActivity: lastActivityTS,
 			PID:          panePID,
 		}
-		if len(parts) >= 13 {
-			collapsedVal := strings.TrimSpace(parts[12])
+		if len(parts) > collapsedField {
+			collapsedVal := strings.TrimSpace(parts[collapsedField])
 			if collapsedVal == "1" || collapsedVal == "true" {
 				pane.Collapsed = true
 			}
 		}
 
-		result[windowIdx] = append(result[windowIdx], pane)
+		result[windowID] = append(result[windowID], pane)
 	}
 
 	return result, nil
@@ -708,7 +764,11 @@ func ListWindowsWithPanes() ([]Window, error) {
 	} else {
 		// Assign panes to their windows
 		for i := range windows {
-			windows[i].Panes = allPanes[windows[i].Index]
+			panes := allPanes[windows[i].ID]
+			if len(panes) == 0 {
+				panes = allPanes[legacyWindowIndexKey(strconv.Itoa(windows[i].Index))]
+			}
+			windows[i].Panes = panes
 		}
 	}
 

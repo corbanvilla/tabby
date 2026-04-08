@@ -68,6 +68,25 @@ if window_exists_by_id "$WINDOW_A_ID"; then
 fi
 echo "✓ Targeted orphan window closed"
 
+# Last orphaned window in a session should kill the whole session rather than
+# leaving a fullscreen sidebar utility pane behind.
+LAST_SESSION="tabby-orphan-last-window-test"
+tmux kill-session -t "$LAST_SESSION" 2>/dev/null || true
+tmux new-session -d -s "$LAST_SESSION" -n "only"
+tmux split-window -d -h -t "$LAST_SESSION:only" "exec -a sidebar sleep 120"
+sleep 0.2
+only_pane="$(tmux list-panes -t "$LAST_SESSION:only" -F '#{pane_id}|#{pane_current_command}|#{pane_start_command}' | awk -F'|' '$2 !~ /(sidebar|sidebar-renderer|pane-header)/ && $3 !~ /(sidebar|sidebar-renderer|pane-header)/ { print $1; exit }')"
+tmux kill-pane -t "$only_pane"
+LAST_SESSION_ID="$(tmux display-message -p -t "$LAST_SESSION" '#{session_id}')"
+LAST_WINDOW_ID="$(tmux display-message -p -t "$LAST_SESSION:only" '#{window_id}')"
+bash "$PROJECT_ROOT/scripts/cleanup_orphan_sidebar.sh" "$LAST_SESSION_ID" "$LAST_WINDOW_ID"
+sleep 0.2
+if tmux has-session -t "$LAST_SESSION" 2>/dev/null; then
+  echo "✗ Last orphaned session was not closed" >&2
+  exit 1
+fi
+echo "✓ Last orphaned session closed instead of leaving fullscreen sidebar"
+
 create_orphan_window "orphan-b"
 create_orphan_window "orphan-c"
 WINDOW_B_ID="$(tmux display-message -p -t "$TEST_SESSION:orphan-b" '#{window_id}')"

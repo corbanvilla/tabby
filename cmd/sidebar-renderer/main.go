@@ -1986,8 +1986,17 @@ func (m rendererModel) View() string {
 	var visible []string
 	for i := visibleStart; i < visibleEnd && i < len(lines); i++ {
 		line := lines[i]
-		// Pad line to full width if shorter
 		lineWidth := runewidth.StringWidth(stripAnsi(line))
+		if lineWidth > m.width {
+			// Defensive clamp: if daemon output overruns the real pane width,
+			// tmux wraps it and the sidebar turns into repeated horizontal bands.
+			if *debugMode {
+				debugLog.Printf("clamping overwide line: width=%d pane_width=%d row=%d", lineWidth, m.width, i)
+			}
+			line = truncateToWidth(stripAnsi(line), m.width)
+			lineWidth = runewidth.StringWidth(line)
+		}
+		// Pad line to full width if shorter
 		if lineWidth < m.width {
 			line += strings.Repeat(" ", m.width-lineWidth)
 		}

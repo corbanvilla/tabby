@@ -62,6 +62,31 @@ func TestGroupWindowsFallbackToDefault(t *testing.T) {
 	}
 }
 
+func TestGroupWindowsFallsBackToNamePatternWhenGroupUnset(t *testing.T) {
+	windows := []tmux.Window{
+		{Name: "Prismata|Infra", Index: 0, Group: ""},
+		{Name: "notes", Index: 1, Group: ""},
+	}
+	groups := []config.Group{
+		{Name: "Prismata", Pattern: "^Prismata\\|"},
+		{Name: "Default", Pattern: ".*"},
+	}
+
+	result := GroupWindows(windows, groups)
+
+	counts := map[string]int{}
+	for _, group := range result {
+		counts[group.Name] = len(group.Windows)
+	}
+
+	if counts["Prismata"] != 1 {
+		t.Fatalf("expected Prismata count 1, got %d", counts["Prismata"])
+	}
+	if counts["Default"] != 1 {
+		t.Fatalf("expected Default count 1, got %d", counts["Default"])
+	}
+}
+
 func TestLightenColor(t *testing.T) {
 	tests := []struct {
 		name      string

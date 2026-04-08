@@ -168,10 +168,17 @@ else
 fi
 
 # Enable automatic window renaming by default (shows running command/SSH host)
-# Windows with group prefixes or manual names get locked via @tabby_locked
-tmux set-option -g automatic-rename on
-tmux set-option -g allow-rename on
-tmux set-option -g automatic-rename-format '#{pane_current_command}'
+# Set `@tabby_auto_rename off` to preserve manual names.
+TABBY_AUTO_RENAME=$(tmux show-option -gqv "@tabby_auto_rename" 2>/dev/null || echo "on")
+if [ "$TABBY_AUTO_RENAME" = "off" ] || [ "$TABBY_AUTO_RENAME" = "0" ] || [ "$TABBY_AUTO_RENAME" = "false" ]; then
+    tmux set-option -g automatic-rename off
+    tmux set-option -g allow-rename off
+else
+    # Windows with group prefixes or manual names get locked via @tabby_locked
+    tmux set-option -g automatic-rename on
+    tmux set-option -g allow-rename on
+    tmux set-option -g automatic-rename-format '#{pane_current_command}'
+fi
 
 # Read pane header colors from config (with defaults)
 # Use exact match with leading spaces to avoid substring matches
@@ -271,7 +278,7 @@ if [[ "$PANE_HEADERS" == "true" ]]; then
         fi
     fi
 else
-    tmux set-option -g pane-border-status top
+    tmux set-option -g pane-border-status off
     tmux set-option -g pane-border-lines "$BORDER_LINES"
 fi
 
@@ -510,7 +517,7 @@ if [[ "$POSITION" == "top" ]] || [[ "$POSITION" == "bottom" ]]; then
     tmux set-option -g mouse on
     tmux bind-key -T root MouseDown1Status select-window -t =
     tmux bind-key -T root MouseDown2Status run-shell "$CURRENT_DIR/scripts/kill_window.sh #{window_index}"
-    tmux bind-key -T root MouseDown3Status command-prompt -I "#W" "rename-window '%%' ; set-window-option @tabby_name_locked 1"
+    tmux bind-key -T root MouseDown3Status command-prompt -I "#W" "rename-window '%%' ; set-window-option @tabby_name_locked 1 ; run-shell '$SIGNAL_SIDEBAR_SCRIPT' ; run-shell '$REFRESH_STATUS_SCRIPT'"
     tmux bind-key -T root MouseDown1StatusRight new-window
 fi
 
@@ -522,6 +529,10 @@ SIGNAL_SIDEBAR_SCRIPT="$CURRENT_DIR/scripts/signal_sidebar.sh"
 cat > "$SIGNAL_SIDEBAR_SCRIPT" << 'SCRIPT_EOF'
 #!/usr/bin/env bash
 # Signal daemon to refresh window list (instant re-render + spawn new renderers)
+CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
+
 SESSION_ID="${1:-$(tmux display-message -p '#{session_id}')}"
 PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
 
@@ -595,12 +606,12 @@ tmux set-hook -g after-new-window "run-shell '$APPLY_GROUP_SCRIPT'; run-shell '$
 # Combined script to reduce latency + track window history
 ON_WINDOW_SELECT_SCRIPT="$CURRENT_DIR/scripts/on_window_select.sh"
 chmod +x "$ON_WINDOW_SELECT_SCRIPT"
-tmux set-hook -g after-select-window "run-shell '$ON_WINDOW_SELECT_SCRIPT'; run-shell '$REFRESH_STATUS_SCRIPT'; run-shell -b '$TRACK_WINDOW_HISTORY_SCRIPT'; run-shell -b '$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\"'; run-shell -b '$STATUS_GUARD_SCRIPT \"#{session_id}\"'; run-shell -b '[ -x \"$CYCLE_PANE_BIN\" ] && \"$CYCLE_PANE_BIN\" --dim-only'"
+tmux set-hook -g after-select-window "run-shell '$ON_WINDOW_SELECT_SCRIPT'; run-shell '$REFRESH_STATUS_SCRIPT'; run-shell -b '$TRACK_WINDOW_HISTORY_SCRIPT'; run-shell -b '$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\"'; run-shell -b '$STATUS_GUARD_SCRIPT \"#{session_id}\"'; run-shell -b 'if [ -x \"$CYCLE_PANE_BIN\" ]; then \"$CYCLE_PANE_BIN\" --dim-only; fi'"
 # Lock window name on manual rename via prefix+, keybinding
 # NOTE: We intentionally do NOT use after-rename-window hook because the daemon's
 # own rename-window calls would trigger it, locking the daemon out of future updates.
 # Instead, we set @tabby_name_locked directly in each user-facing rename path.
-tmux bind-key , command-prompt -I "#W" "rename-window '%%' ; set-window-option @tabby_name_locked 1"
+tmux bind-key , command-prompt -I "#W" "rename-window '%%' ; set-window-option @tabby_name_locked 1 ; run-shell '$SIGNAL_SIDEBAR_SCRIPT' ; run-shell '$REFRESH_STATUS_SCRIPT'"
 
 # Refresh sidebar when pane focus changes
 ON_PANE_SELECT_SCRIPT="$CURRENT_DIR/scripts/on_pane_select.sh"
@@ -608,7 +619,7 @@ chmod +x "$ON_PANE_SELECT_SCRIPT"
 # Use -b flag to run scripts in background so focus happens immediately
 # Combined into a single run-shell to reduce process overhead
 # optimization: pass args to avoid internal tmux calls
-tmux set-hook -g after-select-pane "run-shell -b '$ON_PANE_SELECT_SCRIPT \"#{session_id}\"; $SAVE_LAYOUT_SCRIPT \"#{window_id}\" \"#{window_layout}\"; [ -x \"$CYCLE_PANE_BIN\" ] && \"$CYCLE_PANE_BIN\" --dim-only'"
+tmux set-hook -g after-select-pane "run-shell -b '$ON_PANE_SELECT_SCRIPT \"#{session_id}\"; $SAVE_LAYOUT_SCRIPT \"#{window_id}\" \"#{window_layout}\"; if [ -x \"$CYCLE_PANE_BIN\" ]; then \"$CYCLE_PANE_BIN\" --dim-only; fi'"
 # pane-focus-in is redundant/unreliable, using after-select-pane is sufficient
 # tmux set-hook -g pane-focus-in "run-shell '$ON_PANE_SELECT_SCRIPT'; run-shell '$SAVE_LAYOUT_SCRIPT'"
 # Signal sidebar when panes are split, and preserve window name

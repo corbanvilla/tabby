@@ -4,6 +4,8 @@
 set -eu
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
 
 # Use daemon mode (only supported mode now)
 DAEMON_BIN="$CURRENT_DIR/bin/tabby-daemon"

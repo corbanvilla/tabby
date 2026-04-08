@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -u
 
+CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
+
 NEW_ID="${1:-}"
 if [ -z "$NEW_ID" ]; then
     exit 0

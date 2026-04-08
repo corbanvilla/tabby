@@ -39,8 +39,12 @@ reset_mouse_escape_sequences() {
 
 spawn_missing_renderers_fallback() {
     local debug_flag=""
+    local split_pos_flag=""
     if [ "${TABBY_DEBUG:-}" = "1" ]; then
         debug_flag="-debug"
+    fi
+    if [ "${SIDEBAR_POSITION:-left}" = "left" ]; then
+        split_pos_flag="-b"
     fi
 
     while IFS= read -r window_id; do
@@ -52,15 +56,30 @@ spawn_missing_renderers_fallback() {
             continue
         fi
 
-        first_pane=$(tmux list-panes -t "$window_id" -F "#{pane_id}" 2>/dev/null | head -n1)
+        first_pane=$(
+            tmux list-panes -t "$window_id" -F "#{pane_id}|#{pane_current_command}|#{pane_start_command}" 2>/dev/null \
+            | awk -F'|' '
+                $2 ~ /(sidebar|sidebar-renderer|pane-header|tabby-daemon)/ { next }
+                $3 ~ /(sidebar|sidebar-renderer|pane-header|tabby-daemon)/ { next }
+                { print $1; exit }
+            '
+        )
+        if [ -z "$first_pane" ]; then
+            first_pane=$(tmux list-panes -t "$window_id" -F "#{pane_id}" 2>/dev/null | head -n1)
+        fi
         [ -z "$first_pane" ] && continue
 
         cmd_str="printf '\\033[?25l\\033[2J\\033[H' && exec '$RENDERER_BIN' -session '$SESSION_ID' -window '$window_id' $debug_flag"
-        tmux split-window -d -t "$first_pane" -h -b -f -l "$SIDEBAR_WIDTH" "$cmd_str" 2>/dev/null || true
+        tmux split-window -d -t "$first_pane" -h $split_pos_flag -f -l "$SIDEBAR_WIDTH" "$cmd_str" 2>/dev/null || true
     done < <(tmux list-windows -t "$SESSION_ID" -F "#{window_id}" 2>/dev/null || true)
 }
 
 restart_daemon_if_unresponsive() {
+    get_file_size() {
+        local p="$1"
+        stat -c %s "$p" 2>/dev/null || stat -f %z "$p" 2>/dev/null || echo ""
+    }
+
     if [ ! -f "$DAEMON_PID_FILE" ] || [ ! -S "$DAEMON_SOCK" ]; then
         return
     fi
@@ -75,7 +94,7 @@ restart_daemon_if_unresponsive() {
         return
     fi
 
-    LAST_SIZE=$(stat -f %z "$DAEMON_EVENTS_LOG" 2>/dev/null || echo "")
+    LAST_SIZE=$(get_file_size "$DAEMON_EVENTS_LOG")
     if [ -z "$LAST_SIZE" ]; then
         return
     fi
@@ -84,7 +103,7 @@ restart_daemon_if_unresponsive() {
     NEW_SIZE=""
     for _ in $(seq 1 10); do
         sleep 0.1
-        NEW_SIZE=$(stat -f %z "$DAEMON_EVENTS_LOG" 2>/dev/null || echo "")
+        NEW_SIZE=$(get_file_size "$DAEMON_EVENTS_LOG")
         if [ -n "$NEW_SIZE" ] && [ "$NEW_SIZE" -gt "$LAST_SIZE" ]; then
             return
         fi
@@ -300,7 +319,7 @@ else
     REFRESH_STATUS_SCRIPT="$CURRENT_DIR/scripts/refresh_status.sh"
     TRACK_WINDOW_HISTORY_SCRIPT="$CURRENT_DIR/scripts/track_window_history.sh"
     CYCLE_PANE_BIN="$CURRENT_DIR/bin/cycle-pane"
-    tmux set-hook -g after-select-window "run-shell '$ON_WINDOW_SELECT_SCRIPT'; run-shell '$REFRESH_STATUS_SCRIPT'; run-shell -b '$TRACK_WINDOW_HISTORY_SCRIPT'; run-shell -b '$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\"'; run-shell -b '$STATUS_GUARD_SCRIPT \"#{session_id}\"'; run-shell -b '[ -x \"$CYCLE_PANE_BIN\" ] && \"$CYCLE_PANE_BIN\" --dim-only'"
+    tmux set-hook -g after-select-window "run-shell '$ON_WINDOW_SELECT_SCRIPT'; run-shell '$REFRESH_STATUS_SCRIPT'; run-shell -b '$TRACK_WINDOW_HISTORY_SCRIPT'; run-shell -b '$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\"'; run-shell -b '$STATUS_GUARD_SCRIPT \"#{session_id}\"'; run-shell -b 'if [ -x \"$CYCLE_PANE_BIN\" ]; then \"$CYCLE_PANE_BIN\" --dim-only; fi'"
 
     # Fallback spawn: if daemon auto-spawn lags or misses a window, force renderer panes now.
     spawn_missing_renderers_fallback

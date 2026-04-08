@@ -6,6 +6,8 @@
 # This script ensures the daemon is running and renderers exist in all windows.
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
 SESSION_ID=$(tmux display-message -p '#{session_id}' 2>/dev/null || echo "")
 if [ -z "$SESSION_ID" ]; then exit 0; fi
 SIDEBAR_STATE_FILE="/tmp/tabby-sidebar-${SESSION_ID}.state"
@@ -14,6 +16,11 @@ DAEMON_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
 DAEMON_EVENTS_LOG="/tmp/tabby-daemon-${SESSION_ID}-events.log"
 
 restart_daemon_if_unresponsive() {
+    get_file_size() {
+        local p="$1"
+        stat -c %s "$p" 2>/dev/null || stat -f %z "$p" 2>/dev/null || echo ""
+    }
+
     if [ ! -f "$DAEMON_PID_FILE" ] || [ ! -S "$DAEMON_SOCK" ]; then
         return
     fi
@@ -28,7 +35,7 @@ restart_daemon_if_unresponsive() {
         return
     fi
 
-    LAST_SIZE=$(stat -f %z "$DAEMON_EVENTS_LOG" 2>/dev/null || echo "")
+    LAST_SIZE=$(get_file_size "$DAEMON_EVENTS_LOG")
     if [ -z "$LAST_SIZE" ]; then
         return
     fi
@@ -37,7 +44,7 @@ restart_daemon_if_unresponsive() {
     NEW_SIZE=""
     for _ in $(seq 1 10); do
         sleep 0.1
-        NEW_SIZE=$(stat -f %z "$DAEMON_EVENTS_LOG" 2>/dev/null || echo "")
+        NEW_SIZE=$(get_file_size "$DAEMON_EVENTS_LOG")
         if [ -n "$NEW_SIZE" ] && [ "$NEW_SIZE" -gt "$LAST_SIZE" ]; then
             return
         fi

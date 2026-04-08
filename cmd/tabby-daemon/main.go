@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
-	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -386,14 +385,14 @@ func spawnRenderersForNewWindows(server *daemon.Server, sessionID string, window
 		// The cached win.Panes has sidebar panes filtered out by ListWindowsWithPanes,
 		// so we must ask tmux directly. This also catches renderers from other daemons.
 		// Dead system panes (from a crashed daemon) are killed here so focus can escape them.
-		hasRenderer := false
+		systemPanes := make([]string, 0, 2)
 		if rawOut, err := exec.Command("tmux", "list-panes", "-t", windowID, "-F",
 			"#{pane_id}\x1f#{pane_dead}\x1f#{pane_current_command}\x1f#{pane_start_command}").Output(); err == nil {
 			for _, rawLine := range strings.Split(strings.TrimSpace(string(rawOut)), "\n") {
 				if rawLine == "" {
 					continue
 				}
-				rawParts := strings.SplitN(rawLine, "\x1f", 4)
+				rawParts := splitTmuxFields(rawLine, 4)
 				if len(rawParts) < 4 {
 					continue
 				}
@@ -410,13 +409,24 @@ func spawnRenderersForNewWindows(server *daemon.Server, sessionID string, window
 					continue
 				}
 				if !dead && isSystem {
-					hasRenderer = true
-					break
+					systemPanes = append(systemPanes, paneID)
 				}
 			}
 		}
-		if hasRenderer {
-			logEvent("SPAWN_CHECK window=%s result=skip_has_pane", windowID)
+
+		// Hard singleton guard: never allow more than one live sidebar renderer
+		// in a single window. Keep the first discovered pane and kill extras.
+		if len(systemPanes) > 1 {
+			keep := systemPanes[0]
+			for _, paneID := range systemPanes[1:] {
+				logEvent("CLEANUP_DUPLICATE_RENDERER window=%s keep=%s kill=%s", windowID, keep, paneID)
+				exec.Command("tmux", "kill-pane", "-t", paneID).Run()
+			}
+			systemPanes = systemPanes[:1]
+		}
+
+		if len(systemPanes) > 0 {
+			logEvent("SPAWN_CHECK window=%s result=skip_has_pane count=%d", windowID, len(systemPanes))
 			continue
 		}
 
@@ -551,6 +561,17 @@ func cleanupOrphanedSidebars(windows []tmux.Window) {
 		}
 
 		if hasSidebar && nonSystemLive == 0 {
+			if len(windows) == 1 {
+				if sessionOut, sessionErr := exec.Command("tmux", "display-message", "-p", "-t", windowID, "#{session_id}").Output(); sessionErr == nil {
+					sessionID := strings.TrimSpace(string(sessionOut))
+					if sessionID != "" {
+						logEvent("CLEANUP_LAST_ORPHAN_SESSION session=%s window=%s", sessionID, windowID)
+						debugLog.Printf("Last window %s only has system panes, killing session %s", windowID, sessionID)
+						exec.Command("tmux", "kill-session", "-t", sessionID).Run()
+						return
+					}
+				}
+			}
 			currentWindow := ""
 			if curOut, curErr := exec.Command("tmux", "display-message", "-p", "#{window_id}").Output(); curErr == nil {
 				currentWindow = strings.TrimSpace(string(curOut))
@@ -731,37 +752,98 @@ func spawnPaneHeaders(server *daemon.Server, sessionID string, customBorder bool
 	}
 
 	panesWithHeader := make(map[string]bool) // content paneID -> has header
+	headerPaneByID := make(map[string]bool)  // paneID -> is a header/system pane
+	runningHeaderCountByWindow := make(map[string]int)
+	contentCountByWindow := make(map[string]int)
+	type headerGeom struct {
+		windowID string
+		top      int
+		left     int
+		width    int
+		height   int
+	}
+	var unresolvedHeaderGeoms []headerGeom
+	headerStartCmdsByWindow := make(map[string][]string)
+
+	type headerCandidate struct {
+		paneID string
+		score  int
+	}
 
 	if headerOut, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{pane_id}\x1f#{pane_current_command}\x1f#{pane_start_command}").Output(); err == nil {
-		headersByTarget := make(map[string][]string)
+		"#{pane_id}\x1f#{pane_current_command}\x1f#{pane_start_command}\x1f#{?@tabby_role,#{@tabby_role},}\x1f#{?@tabby_target_pane,#{@tabby_target_pane},}\x1f#{window_id}\x1f#{pane_top}\x1f#{pane_left}\x1f#{pane_width}\x1f#{pane_height}").Output(); err == nil {
+		headersByTarget := make(map[string][]headerCandidate)
 		for _, line := range strings.Split(strings.TrimSpace(string(headerOut)), "\n") {
 			if line == "" {
 				continue
 			}
-			parts := strings.SplitN(line, "\x1f", 3)
-			if len(parts) < 3 {
+			parts := splitTmuxFields(line, 10)
+			if len(parts) < 10 {
 				continue
 			}
 			paneID := parts[0]
 			curCmd := parts[1]
 			startCmd := parts[2]
-			if !strings.Contains(curCmd, "pane-header") && !strings.Contains(startCmd, "pane-header") {
+			role := parts[3]
+			targetOpt := parts[4]
+			winID := parts[5]
+			top, _ := strconv.Atoi(parts[6])
+			left, _ := strconv.Atoi(parts[7])
+			width, _ := strconv.Atoi(parts[8])
+			height, _ := strconv.Atoi(parts[9])
+			isHeader := role == "pane-header" || strings.Contains(curCmd, "pane-header") || strings.Contains(startCmd, "pane-header")
+			if !isHeader {
 				continue
 			}
-			target := paneTargetFromStartCmd(startCmd)
+			headerPaneByID[paneID] = true
+			if strings.Contains(curCmd, "pane-header") {
+				runningHeaderCountByWindow[winID]++
+			}
+			headerStartCmdsByWindow[winID] = append(headerStartCmdsByWindow[winID], startCmd)
+			target := strings.TrimSpace(targetOpt)
 			if target == "" {
+				target = paneTargetFromStartCmd(startCmd)
+			}
+			if target == "" {
+				unresolvedHeaderGeoms = append(unresolvedHeaderGeoms, headerGeom{
+					windowID: winID,
+					top:      top,
+					left:     left,
+					width:    width,
+					height:   height,
+				})
 				continue
 			}
 			panesWithHeader[target] = true
-			headersByTarget[target] = append(headersByTarget[target], paneID)
+			score := 0
+			if strings.Contains(curCmd, "pane-header") {
+				score += 4
+			}
+			if role == "pane-header" {
+				score += 2
+			}
+			if strings.Contains(startCmd, "pane-header") {
+				score++
+			}
+			headersByTarget[target] = append(headersByTarget[target], headerCandidate{paneID: paneID, score: score})
 		}
 
-		for target, headerPanes := range headersByTarget {
-			if len(headerPanes) <= 1 {
+		for target, candidates := range headersByTarget {
+			if len(candidates) <= 1 {
 				continue
 			}
-			for _, extraPane := range headerPanes[1:] {
+			bestIdx := 0
+			for i := 1; i < len(candidates); i++ {
+				if candidates[i].score > candidates[bestIdx].score ||
+					(candidates[i].score == candidates[bestIdx].score && candidates[i].paneID > candidates[bestIdx].paneID) {
+					bestIdx = i
+				}
+			}
+			for i, c := range candidates {
+				if i == bestIdx {
+					continue
+				}
+				extraPane := c.paneID
 				logEvent("HEADER_DEDUP target=%s kill=%s", target, extraPane)
 				markSkipPreserveForWindow(extraPane)
 				exec.Command("tmux", "kill-pane", "-t", extraPane).Run()
@@ -783,6 +865,9 @@ func spawnPaneHeaders(server *daemon.Server, sessionID string, customBorder bool
 		for _, p := range win.Panes {
 			curCmd := p.Command
 			startCmd := p.StartCommand
+			if headerPaneByID[p.ID] {
+				continue
+			}
 
 			// Check if this is a system pane (sidebar/renderer/header/daemon)
 			// by checking BOTH current command and start command
@@ -808,6 +893,36 @@ func spawnPaneHeaders(server *daemon.Server, sessionID string, customBorder bool
 				height:   p.Height,
 				width:    p.Width,
 			})
+			contentCountByWindow[win.ID]++
+
+			// Fallback: header process may have crashed and lost parseable target metadata,
+			// but the pane still sits directly above the content pane. Match by geometry.
+			if !panesWithHeader[p.ID] {
+				for _, sc := range headerStartCmdsByWindow[win.ID] {
+					if strings.Contains(sc, "-pane '"+p.ID+"'") ||
+						strings.Contains(sc, "-pane \""+p.ID+"\"") ||
+						strings.Contains(sc, "-pane "+p.ID) {
+						panesWithHeader[p.ID] = true
+						break
+					}
+				}
+			}
+
+			if !panesWithHeader[p.ID] {
+				for _, hg := range unresolvedHeaderGeoms {
+					if hg.windowID != win.ID {
+						continue
+					}
+					if hg.left != p.Left || hg.width != p.Width {
+						continue
+					}
+					// Header should be immediately above the content pane.
+					if hg.top+hg.height == p.Top {
+						panesWithHeader[p.ID] = true
+						break
+					}
+				}
+			}
 		}
 	}
 
@@ -817,6 +932,12 @@ func spawnPaneHeaders(server *daemon.Server, sessionID string, customBorder bool
 	for _, pane := range contentPanes {
 		// Skip if this pane already has a header
 		if panesWithHeader[pane.id] {
+			continue
+		}
+
+		// Failsafe: never exceed one RUNNING header per content pane in a window.
+		// Stale fallback shells are handled by cleanup and do not count.
+		if runningHeaderCountByWindow[pane.windowID] >= contentCountByWindow[pane.windowID] {
 			continue
 		}
 
@@ -838,25 +959,39 @@ func spawnPaneHeaders(server *daemon.Server, sessionID string, customBorder bool
 		logEvent("SPAWN_HEADER pane=%s window=%s active_before=%s width=%d height=%d custom_border=%v", pane.id, pane.windowID, activeBeforeHeader, pane.width, pane.height, customBorder)
 		cmdStr := fmt.Sprintf("printf '\\033[?25l\\033[2J\\033[H' && exec '%s' -session '%s' -pane '%s' %s", headerBin, sessionID, pane.id, debugFlag)
 		headerHeight := "1"
-		spawnCmd := exec.Command("tmux", "split-window", "-d", "-t", pane.id, "-v", "-b", "-l", headerHeight, cmdStr)
-		if out, err := spawnCmd.CombinedOutput(); err != nil {
+		spawnCmd := exec.Command("tmux", "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", pane.id, "-v", "-b", "-l", headerHeight, cmdStr)
+		out, err := spawnCmd.CombinedOutput()
+		if err != nil {
 			debugLog.Printf("Failed to spawn pane header for %s: %v, output: %s", pane.id, err, string(out))
 			continue
 		}
+		newHeaderPane := strings.TrimSpace(string(out))
+		if newHeaderPane != "" {
+			exec.Command("tmux", "set-option", "-p", "-t", newHeaderPane, "@tabby_role", "pane-header").Run()
+			exec.Command("tmux", "set-option", "-p", "-t", newHeaderPane, "@tabby_target_pane", pane.id).Run()
+		}
 		spawned = true
 		spawnedInWindow[pane.windowID] = true
+		runningHeaderCountByWindow[pane.windowID]++
 	}
 
 	// Disable pane borders on all newly spawned header panes
 	if spawned {
 		for winID := range spawnedInWindow {
 			headerPaneOut, err := exec.Command("tmux", "list-panes", "-t", winID, "-F",
-				"#{pane_id}\x1f#{pane_current_command}\x1f#{pane_start_command}").Output()
+				"#{pane_id}\x1f#{pane_current_command}\x1f#{pane_start_command}\x1f#{?@tabby_role,#{@tabby_role},}").Output()
 			if err == nil {
 				for _, hLine := range strings.Split(string(headerPaneOut), "\n") {
 					hLine = strings.TrimSpace(hLine)
-					if strings.Contains(hLine, "pane-header") {
-						hParts := strings.SplitN(hLine, "\x1f", 3)
+					if hLine == "" {
+						continue
+					}
+					hParts := strings.SplitN(hLine, "\x1f", 4)
+					if len(hParts) < 4 {
+						continue
+					}
+					isHeader := hParts[3] == "pane-header" || strings.Contains(hParts[1], "pane-header") || strings.Contains(hParts[2], "pane-header")
+					if isHeader {
 						if len(hParts) >= 1 {
 							exec.Command("tmux", "resize-pane", "-t", hParts[0], "-y", "1").Run()
 							exec.Command("tmux", "set-option", "-p", "-t", hParts[0], "pane-border-status", "off").Run()
@@ -885,6 +1020,14 @@ func paneTargetFromStartCmd(startCmd string) string {
 	return ""
 }
 
+// splitTmuxFields accepts raw \x1f delimiters and escaped \037 delimiters.
+func splitTmuxFields(line string, n int) []string {
+	if strings.Contains(line, `\037`) && !strings.Contains(line, "\x1f") {
+		line = strings.ReplaceAll(line, `\037`, "\x1f")
+	}
+	return strings.SplitN(line, "\x1f", n)
+}
+
 // cleanupOrphanedHeaders removes header panes that are disabled or orphaned
 // (target pane no longer exists).
 func cleanupOrphanedHeaders(customBorder bool, coordinator *Coordinator, activeWindowID string) {
@@ -895,7 +1038,7 @@ func cleanupOrphanedHeaders(customBorder bool, coordinator *Coordinator, activeW
 		listArgs = append(listArgs, "-t", *sessionID)
 	}
 	listArgs = append(listArgs, "-F",
-		"#{pane_id}\x1f#{pane_current_command}\x1f#{pane_width}\x1f#{pane_start_command}\x1f#{pane_height}\x1f#{pane_top}\x1f#{pane_left}\x1f#{window_id}")
+		"#{pane_id}\x1f#{pane_current_command}\x1f#{pane_width}\x1f#{pane_start_command}\x1f#{pane_height}\x1f#{pane_top}\x1f#{pane_left}\x1f#{window_id}\x1f#{?@tabby_role,#{@tabby_role},}\x1f#{?@tabby_target_pane,#{@tabby_target_pane},}")
 	out, err := exec.Command("tmux", listArgs...).Output()
 	if err != nil {
 		return
@@ -914,8 +1057,8 @@ func cleanupOrphanedHeaders(customBorder bool, coordinator *Coordinator, activeW
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\x1f", 8)
-		if len(parts) < 8 {
+		parts := splitTmuxFields(line, 10)
+		if len(parts) < 10 {
 			continue
 		}
 		paneID := parts[0]
@@ -925,7 +1068,9 @@ func cleanupOrphanedHeaders(customBorder bool, coordinator *Coordinator, activeW
 		heightStr := parts[4]
 		topStr := parts[5]
 		leftStr := parts[6]
-		isSystem := strings.Contains(curCmd, "pane-header") || strings.Contains(curCmd, "sidebar") ||
+		role := parts[8]
+		isSystem := role == "pane-header" ||
+			strings.Contains(curCmd, "pane-header") || strings.Contains(curCmd, "sidebar") ||
 			strings.Contains(curCmd, "renderer") || strings.Contains(curCmd, "tabby") ||
 			strings.Contains(startCmd, "pane-header") || strings.Contains(startCmd, "sidebar") ||
 			strings.Contains(startCmd, "renderer") || strings.Contains(startCmd, "tabby")
@@ -948,6 +1093,10 @@ func cleanupOrphanedHeaders(customBorder bool, coordinator *Coordinator, activeW
 		height   int
 		top      int
 		left     int
+		score    int
+		curCmd   string
+		startCmd string
+		role     string
 	}
 	var headers []headerInfo
 
@@ -956,14 +1105,15 @@ func cleanupOrphanedHeaders(customBorder bool, coordinator *Coordinator, activeW
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\x1f", 8)
-		if len(parts) < 8 {
+		parts := splitTmuxFields(line, 10)
+		if len(parts) < 10 {
 			continue
 		}
 		curCmd := parts[1]
 		widthStr := parts[2]
 		startCmd := parts[3]
-		if !strings.Contains(curCmd, "pane-header") && !strings.Contains(startCmd, "pane-header") {
+		role := parts[8]
+		if role != "pane-header" && !strings.Contains(curCmd, "pane-header") && !strings.Contains(startCmd, "pane-header") {
 			continue
 		}
 		w, _ := strconv.Atoi(widthStr)
@@ -971,26 +1121,47 @@ func cleanupOrphanedHeaders(customBorder bool, coordinator *Coordinator, activeW
 		top, _ := strconv.Atoi(parts[5])
 		left, _ := strconv.Atoi(parts[6])
 		winID := parts[7]
-		target := paneTargetFromStartCmd(startCmd)
+		target := strings.TrimSpace(parts[9])
+		if target == "" {
+			target = paneTargetFromStartCmd(startCmd)
+		}
+		score := 0
+		if strings.Contains(curCmd, "pane-header") {
+			score += 4
+		}
+		if role == "pane-header" {
+			score += 2
+		}
+		if strings.Contains(startCmd, "pane-header") {
+			score++
+		}
 		headers = append(headers, headerInfo{
 			paneID: parts[0], windowID: winID,
-			target: target, width: w, height: h, top: top, left: left,
+			target: target, width: w, height: h, top: top, left: left, score: score,
+			curCmd: curCmd, startCmd: startCmd, role: role,
 		})
 	}
 
 	keepHeader := make(map[string]bool)
-	byTarget := make(map[string][]string)
+	byTarget := make(map[string][]headerInfo)
 	for _, hdr := range headers {
 		if hdr.target == "" {
 			continue
 		}
-		byTarget[hdr.target] = append(byTarget[hdr.target], hdr.paneID)
+		byTarget[hdr.target] = append(byTarget[hdr.target], hdr)
 	}
-	for _, paneIDs := range byTarget {
-		sort.Strings(paneIDs)
-		if len(paneIDs) > 0 {
-			keepHeader[paneIDs[0]] = true
+	for _, candidates := range byTarget {
+		if len(candidates) == 0 {
+			continue
 		}
+		best := candidates[0]
+		for i := 1; i < len(candidates); i++ {
+			c := candidates[i]
+			if c.score > best.score || (c.score == best.score && c.paneID > best.paneID) {
+				best = c
+			}
+		}
+		keepHeader[best.paneID] = true
 	}
 
 	// Process headers: kill disabled, orphaned, or mismatched dimensions
@@ -999,6 +1170,17 @@ func cleanupOrphanedHeaders(customBorder bool, coordinator *Coordinator, activeW
 		// Kill if headers disabled globally
 		if !headersEnabled {
 			logEvent("CLEANUP_HEADER pane=%s reason=disabled", hdr.paneID)
+			markSkipPreserveForWindow(hdr.paneID)
+			exec.Command("tmux", "kill-pane", "-t", hdr.paneID).Run()
+			killed = true
+			continue
+		}
+
+		// If the pane was created for pane-header but is no longer running it,
+		// it has fallen back to a shell and becomes a "ghost" top bar.
+		// Kill immediately to prevent infinite stacked header growth.
+		if strings.Contains(hdr.startCmd, "pane-header") && !strings.Contains(hdr.curCmd, "pane-header") {
+			logEvent("CLEANUP_HEADER pane=%s reason=stale_header_shell cur=%s", hdr.paneID, hdr.curCmd)
 			markSkipPreserveForWindow(hdr.paneID)
 			exec.Command("tmux", "kill-pane", "-t", hdr.paneID).Run()
 			killed = true

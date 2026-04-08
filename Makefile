@@ -1,4 +1,4 @@
-.PHONY: build test test-e2e test-unit test-race test-cover vet ci capture-visual compare-visual update-baseline clean install
+.PHONY: build test test-e2e test-live test-unit test-race test-cover vet ci capture-visual compare-visual update-baseline clean install
 
 # Go parameters
 GOCMD=go
@@ -82,6 +82,17 @@ ci: vet test-race test-cover
 test-e2e: build
 	@$(E2E_DIR)/run_e2e.sh
 
+# Run live tmux integration test (isolated sockets + attached pseudo-clients)
+test-live: build
+	@$(TEST_DIR)/integration/live_tmux_sessions_test.sh
+	@$(TEST_DIR)/integration/live_socket_override_test.sh
+	@$(TEST_DIR)/integration/live_multiclient_same_session_test.sh
+	@$(TEST_DIR)/integration/live_header_singleton_resilience_test.sh
+	@$(TEST_DIR)/integration/live_sidebar_singleton_names_test.sh
+	@$(TEST_DIR)/integration/live_toggle_concurrency_test.sh
+	@$(TEST_DIR)/integration/live_trajectory_matrix_test.sh
+	@$(TEST_DIR)/integration/live_seeded_fuzz_trajectory_test.sh
+
 # Capture visual screenshots
 capture-visual: build
 	@$(E2E_DIR)/capture_visual.sh
@@ -153,6 +164,7 @@ help:
 	@echo "  test           - Run all tests (unit + E2E)"
 	@echo "  test-unit      - Run Go unit tests"
 	@echo "  test-e2e       - Run E2E integration tests"
+	@echo "  test-live      - Run live tmux server/session integration test"
 	@echo "  capture-visual - Capture visual screenshots"
 	@echo "  update-baseline- Update baseline screenshots"
 	@echo "  install        - Install binaries + config (~/.config/tabby/config.yaml)"

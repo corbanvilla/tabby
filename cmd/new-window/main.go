@@ -77,6 +77,14 @@ func main() {
 		if _, err := runTmuxOutput("set-window-option", "-t", newWindowID, "@tabby_group", group); err != nil {
 			debugLog("failed setting @tabby_group on %s: %v", newWindowID, err)
 		}
+		initialName := initialWindowNameForGroup(group)
+		if initialName != "" {
+			if _, err := runTmuxOutput("rename-window", "-t", newWindowID, initialName); err != nil {
+				debugLog("failed setting initial grouped window name on %s: %v", newWindowID, err)
+			} else if _, err := runTmuxOutput("set-window-option", "-t", newWindowID, "@tabby_name_locked", "1"); err != nil {
+				debugLog("failed locking initial grouped window name on %s: %v", newWindowID, err)
+			}
+		}
 	}
 
 	if _, err := runTmuxOutput("set-option", "-g", "@tabby_new_window_id", newWindowID); err != nil {
@@ -363,6 +371,14 @@ func shSingleQuote(s string) string {
 		return "''"
 	}
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func initialWindowNameForGroup(group string) string {
+	group = strings.TrimSpace(group)
+	if group == "" || group == "Default" {
+		return ""
+	}
+	return group + "|"
 }
 
 func firstMatchingToken(output, prefix string) string {

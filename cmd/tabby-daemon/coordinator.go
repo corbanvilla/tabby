@@ -1398,8 +1398,17 @@ func (c *Coordinator) RefreshWindows() {
 
 	windows, err := tmux.ListWindowsWithPanes()
 	if err != nil {
+		logEvent("REFRESH_WINDOWS_ERR session=%s err=%v", c.sessionID, err)
 		return
 	}
+	c.stateMu.RLock()
+	prevCount := len(c.windows)
+	c.stateMu.RUnlock()
+	if len(windows) == 0 && c.sessionID != "" && prevCount > 0 {
+		logEvent("REFRESH_WINDOWS_SUSPECT_EMPTY session=%s prev_count=%d", c.sessionID, prevCount)
+		return
+	}
+	logEvent("REFRESH_WINDOWS_OK session=%s count=%d", c.sessionID, len(windows))
 
 	c.applyCWDColorIconMappings(windows)
 
@@ -1948,6 +1957,15 @@ type tmuxWindowRename struct {
 // Uses the directory basename; combines with " | " when panes are in different dirs.
 // Returns pending rename operations to execute after stateMu is released.
 func (c *Coordinator) syncWindowNames() []tmuxWindowRename {
+	// Keep unit tests hermetic: synthetic test coordinators should not read
+	// process-global tmux options from the developer's live server.
+	if c.sessionID != "test-session" {
+		autoRename := strings.ToLower(strings.TrimSpace(tmuxOutputTrimmed("show-option", "-gqv", "@tabby_auto_rename")))
+		if autoRename != "" && (autoRename == "off" || autoRename == "0" || autoRename == "false") {
+			return nil
+		}
+	}
+
 	home := os.Getenv("HOME")
 	showSSHHost := c.config.Sidebar.ShowSSHHost
 	var pending []tmuxWindowRename
@@ -2012,6 +2030,17 @@ func shortenPath(p, home string) string {
 		return "~"
 	}
 	return base
+}
+
+func stripGroupedDisplayPrefix(windowName, groupName string) string {
+	prefix := groupName + "|"
+	if strings.HasPrefix(windowName, prefix) {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(windowName, prefix))
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return windowName
 }
 
 // tmuxWindowMove is a pending tmux move-window operation collected under lock
@@ -5618,7 +5647,7 @@ func (c *Coordinator) generateMainContent(clientID string, width, height int) (s
 			// Build tab content - use visual position for display (stable sequential
 			// numbering that matches sidebar order regardless of tmux renumbering)
 			// Display is 0-indexed to match tmux window indices
-			displayName := win.Name
+			displayName := stripGroupedDisplayPrefix(win.Name, group.Name)
 			if win.Icon != "" {
 				displayName = win.Icon + " " + displayName
 			}

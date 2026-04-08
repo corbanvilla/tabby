@@ -2,6 +2,7 @@ package grouping
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 
@@ -59,10 +60,12 @@ func GroupWindowsWithOptions(windows []tmux.Window, groups []config.Group, inclu
 			continue
 		}
 
-		// Use the @tabby_group window option if set, otherwise Default
+		// Use the explicit @tabby_group window option if set. Otherwise, fall
+		// back to configured regex patterns against the window name before
+		// sending the window to Default.
 		groupName := win.Group
 		if groupName == "" {
-			groupName = "Default"
+			groupName = inferGroupNameFromPattern(win.Name, groups)
 		}
 
 		// Find the target group
@@ -118,6 +121,22 @@ func GroupWindowsWithOptions(windows []tmux.Window, groups []config.Group, inclu
 	grouped = append(grouped, otherGroups...)
 
 	return grouped
+}
+
+func inferGroupNameFromPattern(windowName string, groups []config.Group) string {
+	for _, group := range groups {
+		if group.Name == "Default" || group.Pattern == "" {
+			continue
+		}
+		re, err := regexp.Compile(group.Pattern)
+		if err != nil {
+			continue
+		}
+		if re.MatchString(windowName) {
+			return group.Name
+		}
+	}
+	return "Default"
 }
 
 func FindGroupTheme(groupName string, groups []config.Group) config.Theme {

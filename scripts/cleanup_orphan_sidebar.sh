@@ -45,6 +45,13 @@ cleanup_window_if_orphan() {
         ')
 
         if [ "$main_panes" -eq 0 ]; then
+            local session_window_count
+            session_window_count=$(tmux list-windows -t "$SESSION_ID" 2>/dev/null | wc -l | tr -d ' ')
+            if [ "${session_window_count:-0}" -le 1 ]; then
+                tmux kill-session -t "$SESSION_ID" 2>/dev/null || true
+                signal_daemon
+                return 0
+            fi
             local current_window
             current_window=$(tmux display-message -p '#{window_id}' 2>/dev/null || echo "")
             if [ -n "$current_window" ] && [ "$current_window" = "$target_window" ]; then

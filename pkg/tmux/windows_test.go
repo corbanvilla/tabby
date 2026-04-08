@@ -42,6 +42,7 @@ func restoreState(t *testing.T) {
 	t.Helper()
 	origRunner := DefaultRunner
 	origTarget := sessionTarget
+	origCanonicalTarget := sessionTargetCanonicalID
 	origAITimeout := aiIdleTimeout
 	origAI := make(map[string]bool, len(aiToolCommands))
 	for k, v := range aiToolCommands {
@@ -54,6 +55,7 @@ func restoreState(t *testing.T) {
 	t.Cleanup(func() {
 		DefaultRunner = origRunner
 		sessionTarget = origTarget
+		sessionTargetCanonicalID = origCanonicalTarget
 		aiIdleTimeout = origAITimeout
 		aiToolCommands = origAI
 		idleCommands = origIdle
@@ -209,6 +211,7 @@ func TestSetSessionTarget(t *testing.T) {
 	t.Run("sets_target", func(t *testing.T) {
 		SetSessionTarget("$1")
 		assert.Equal(t, "$1", sessionTarget)
+		assert.Equal(t, "1", normalizeSessionID(sessionTarget))
 	})
 
 	t.Run("trims_whitespace", func(t *testing.T) {
@@ -220,6 +223,35 @@ func TestSetSessionTarget(t *testing.T) {
 		SetSessionTarget("")
 		assert.Equal(t, "", sessionTarget)
 	})
+}
+
+func TestSplitTmuxFields(t *testing.T) {
+	t.Run("raw_unit_separator", func(t *testing.T) {
+		parts := splitTmuxFields("a\x1fb\x1fc")
+		assert.Equal(t, []string{"a", "b", "c"}, parts)
+	})
+
+	t.Run("escaped_octal_separator", func(t *testing.T) {
+		parts := splitTmuxFields(`a\037b\037c`)
+		assert.Equal(t, []string{"a", "b", "c"}, parts)
+	})
+}
+
+func TestListWindows_ParsesEscapedDelimiterOutput(t *testing.T) {
+	restoreState(t)
+	mock := newMock()
+	raw := fields("@1", "0", "main", "1", "0", "0", "0", "0",
+		"", "", "0", "", "", "", "", "", "", "1", "$1", "", "", "")
+	escaped := strings.ReplaceAll(raw, "\x1f", `\037`)
+	mock.set("list-windows", escaped+"\n", nil)
+	DefaultRunner = mock
+
+	windows, err := ListWindows()
+	assert.NoError(t, err)
+	if assert.Len(t, windows, 1) {
+		assert.Equal(t, "@1", windows[0].ID)
+		assert.Equal(t, "main", windows[0].Name)
+	}
 }
 
 func TestConfigureBusyDetection(t *testing.T) {
@@ -448,10 +480,10 @@ func TestListAllPanes(t *testing.T) {
 
 		result, err := ListAllPanes()
 		assert.NoError(t, err)
-		if !assert.Contains(t, result, 1) {
+		if !assert.Contains(t, result, "#idx:1") {
 			return
 		}
-		panes := result[1]
+		panes := result["#idx:1"]
 		if !assert.Len(t, panes, 1) {
 			return
 		}
@@ -479,7 +511,7 @@ func TestListAllPanes(t *testing.T) {
 
 		result, err := ListAllPanes()
 		assert.NoError(t, err)
-		assert.Empty(t, result[1])
+		assert.Empty(t, result["#idx:1"])
 	})
 
 	t.Run("collapsed_flag_true_parsed", func(t *testing.T) {
@@ -491,8 +523,8 @@ func TestListAllPanes(t *testing.T) {
 
 		result, err := ListAllPanes()
 		assert.NoError(t, err)
-		if assert.Contains(t, result, 2) && assert.Len(t, result[2], 1) {
-			assert.True(t, result[2][0].Collapsed)
+		if assert.Contains(t, result, "#idx:2") && assert.Len(t, result["#idx:2"], 1) {
+			assert.True(t, result["#idx:2"][0].Collapsed)
 		}
 	})
 
@@ -505,8 +537,8 @@ func TestListAllPanes(t *testing.T) {
 
 		result, err := ListAllPanes()
 		assert.NoError(t, err)
-		if assert.Contains(t, result, 3) && assert.Len(t, result[3], 1) {
-			assert.True(t, result[3][0].Busy)
+		if assert.Contains(t, result, "#idx:3") && assert.Len(t, result["#idx:3"], 1) {
+			assert.True(t, result["#idx:3"][0].Busy)
 		}
 	})
 
@@ -539,10 +571,10 @@ func TestListAllPanes(t *testing.T) {
 
 		result, err := ListAllPanes()
 		assert.NoError(t, err)
-		assert.Len(t, result[1], 1)
-		assert.Len(t, result[2], 1)
-		assert.Equal(t, "bash", result[1][0].Command)
-		assert.Equal(t, "vim", result[2][0].Command)
+		assert.Len(t, result["#idx:1"], 1)
+		assert.Len(t, result["#idx:2"], 1)
+		assert.Equal(t, "bash", result["#idx:1"][0].Command)
+		assert.Equal(t, "vim", result["#idx:2"][0].Command)
 	})
 }
 
@@ -645,6 +677,25 @@ func TestListWindowsWithPanes(t *testing.T) {
 		if assert.Len(t, windows, 1) && assert.Len(t, windows[0].Panes, 2) {
 			assert.Equal(t, 0, windows[0].Panes[0].Index)
 			assert.Equal(t, 1, windows[0].Panes[1].Index)
+		}
+	})
+
+	t.Run("legacy_list_panes_format_joins_by_window_index_fallback", func(t *testing.T) {
+		mock := newMock()
+		winLine := fields("@abc", "0", "main", "1", "0", "0", "0", "0",
+			"", "", "0", "", "", "", "", "", "", "1", "$0", "", "", "")
+		mock.set("list-windows", winLine+"\n", nil)
+		// Legacy format: window_index is first field, no window_id present.
+		paneLine := fields("0", "%0", "0", "1", "bash", "shell",
+			"99985", "0", "", "0", "0", "/home", "", "", "bash", "80", "24")
+		mock.set("list-panes", paneLine+"\n", nil)
+		DefaultRunner = mock
+
+		windows, err := ListWindowsWithPanes()
+		assert.NoError(t, err)
+		if assert.Len(t, windows, 1) {
+			assert.Len(t, windows[0].Panes, 1)
+			assert.Equal(t, "bash", windows[0].Panes[0].Command)
 		}
 	})
 }
@@ -970,8 +1021,8 @@ func TestListAllPanes_InvalidPaneIndex(t *testing.T) {
 
 	result, err := ListAllPanes()
 	assert.NoError(t, err)
-	if assert.Contains(t, result, 0) {
-		assert.Len(t, result[0], 1)
+	if assert.Contains(t, result, "#idx:0") {
+		assert.Len(t, result["#idx:0"], 1)
 	}
 }
 
@@ -1063,8 +1114,8 @@ func TestListAllPanes_RemoteActivityDetection(t *testing.T) {
 
 		result, err := ListAllPanes()
 		assert.NoError(t, err)
-		if assert.Len(t, result[0], 1) {
-			assert.True(t, result[0][0].Busy, "remote pane with recent activity should be busy")
+		if assert.Len(t, result["#idx:0"], 1) {
+			assert.True(t, result["#idx:0"][0].Busy, "remote pane with recent activity should be busy")
 		}
 	})
 }
@@ -1081,8 +1132,8 @@ func TestListAllPanes_CollapsedPaneDetection(t *testing.T) {
 
 		result, err := ListAllPanes()
 		assert.NoError(t, err)
-		if assert.Len(t, result[0], 1) {
-			assert.True(t, result[0][0].Collapsed)
+		if assert.Len(t, result["#idx:0"], 1) {
+			assert.True(t, result["#idx:0"][0].Collapsed)
 		}
 	})
 }
