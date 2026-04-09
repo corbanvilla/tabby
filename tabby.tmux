@@ -43,8 +43,11 @@ case "$TABBY_AUTO_START" in
     *) TABBY_AUTO_START=0 ;;
 esac
 
-# Build binaries if not present
-if [ ! -f "$CURRENT_DIR/bin/render-status" ]; then
+# Build binaries if required runtime pieces are missing
+if [ ! -f "$CURRENT_DIR/bin/render-status" ] || \
+   [ ! -f "$CURRENT_DIR/bin/tabby-daemon" ] || \
+   [ ! -f "$CURRENT_DIR/bin/sidebar-renderer" ] || \
+   [ ! -f "$CURRENT_DIR/bin/manage-group" ]; then
     "$CURRENT_DIR/scripts/install.sh" || true
 fi
 
