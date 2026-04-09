@@ -34,6 +34,15 @@ if [ "$TABBY_ENABLED" = "0" ]; then
     exit 0
 fi
 
+# Optional startup policy.
+# When @tabby_auto_start is "off"/"0"/"false", Tabby stays disabled until the
+# user explicitly toggles it on (for example with prefix+Tab).
+TABBY_AUTO_START=$(tmux show-option -gqv "@tabby_auto_start")
+case "$TABBY_AUTO_START" in
+    ""|1|on|true|yes) TABBY_AUTO_START=1 ;;
+    *) TABBY_AUTO_START=0 ;;
+esac
+
 # Build binaries if not present
 if [ ! -f "$CURRENT_DIR/bin/render-status" ]; then
     "$CURRENT_DIR/scripts/install.sh" || true
@@ -45,8 +54,8 @@ fi
 # ensure_sidebar runs (async, at the bottom) the socket should already exist.
 _TABBY_PRESTART_SESSION=$(tmux display-message -p '#{session_id}' 2>/dev/null || echo "")
 _TABBY_PRESTART_MODE=$(tmux show-options -gqv @tabby_sidebar 2>/dev/null || echo "")
-# Default mode is "enabled", so pre-start when mode is enabled OR not yet set
-if [ -n "$_TABBY_PRESTART_SESSION" ] && { [ "$_TABBY_PRESTART_MODE" = "enabled" ] || [ -z "$_TABBY_PRESTART_MODE" ]; }; then
+# Pre-start only when Tabby should actually be active.
+if [ -n "$_TABBY_PRESTART_SESSION" ] && { [ "$_TABBY_PRESTART_MODE" = "enabled" ] || { [ -z "$_TABBY_PRESTART_MODE" ] && [ "$TABBY_AUTO_START" = "1" ]; }; }; then
     _TABBY_PRESTART_SOCK="/tmp/tabby-daemon-${_TABBY_PRESTART_SESSION}.sock"
     _TABBY_PRESTART_PIDF="/tmp/tabby-daemon-${_TABBY_PRESTART_SESSION}.pid"
     _TABBY_PRESTART_WD="/tmp/tabby-daemon-${_TABBY_PRESTART_SESSION}.watchdog.pid"
@@ -470,10 +479,14 @@ tmux set-option -g @tabby_sidebar_width_mobile "$SIDEBAR_WIDTH_MOBILE"
 tmux set-option -g @tabby_sidebar_width_tablet "$SIDEBAR_WIDTH_TABLET"
 tmux set-option -g @tabby_sidebar_width_desktop "$SIDEBAR_WIDTH_DESKTOP"
 
-# First-run bootstrap: if no mode has ever been set, default to enabled.
+# First-run bootstrap: if no mode has ever been set, respect the auto-start policy.
 INITIAL_MODE=$(tmux show-options -gqv @tabby_sidebar 2>/dev/null || echo "")
 if [ -z "$INITIAL_MODE" ]; then
-    tmux set-option -g @tabby_sidebar "enabled"
+    if [ "$TABBY_AUTO_START" = "1" ]; then
+        tmux set-option -g @tabby_sidebar "enabled"
+    else
+        tmux set-option -g @tabby_sidebar "disabled"
+    fi
 fi
 
 # Configure horizontal status bar
@@ -804,14 +817,13 @@ tmux bind-key -n M-# select-window -t :3
 tmux bind-key -n M-$ select-window -t :4
 tmux bind-key -n M-% select-window -t :5
 
-# Ensure mode surfaces are present on load.
-# This covers first-run bootstrap and config reloads where mode is already set
-# but daemon/renderers are not running yet.
-# Run ASYNC (-b) to avoid blocking tmux startup on cold boot.
-# The daemon was pre-started at the top of this file, so by now the socket
-# should be ready (or nearly ready).  Hooks (session-created, after-new-window,
-# after-select-window) also call ensure_sidebar, providing redundancy.
-tmux run-shell -b "$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\""
+# Ensure mode surfaces are present on load when the current mode is enabled.
+# This covers config reloads where the daemon/renderers are missing but Tabby is
+# already active, while still allowing manual-toggle setups to remain idle until
+# prefix+Tab is pressed.
+if [ "$(tmux show-options -gqv @tabby_sidebar 2>/dev/null || echo "")" = "enabled" ]; then
+    tmux run-shell -b "$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\""
+fi
 
 tmux run-shell -b "$STATUS_GUARD_SCRIPT \"#{session_id}\""
 tmux run-shell -b "$FOCUS_RECOVERY_SCRIPT \"#{session_id}\""
