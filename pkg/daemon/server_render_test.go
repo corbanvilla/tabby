@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,12 +49,12 @@ func TestBroadcastRender_DebugLogCalled(t *testing.T) {
 	s := newTestServer(t)
 	s.clients["@1"] = &ClientInfo{Width: 80, Height: 24}
 
-	var logCalls int
-	s.DebugLog = func(format string, args ...interface{}) { logCalls++ }
+	var logCalls atomic.Int32
+	s.DebugLog = func(format string, args ...interface{}) { logCalls.Add(1) }
 	s.BroadcastRender()
 	// Wait for batch timer to fire
 	time.Sleep(s.renderBatchDelay + 10*time.Millisecond)
-	assert.Greater(t, logCalls, 0)
+	assert.Greater(t, logCalls.Load(), int32(0))
 }
 
 func TestBroadcastRenderToClients_OnlyRendersRequestedClients(t *testing.T) {
@@ -150,9 +151,10 @@ func TestSendRenderToClient_SendsOnContentChange(t *testing.T) {
 
 	s.clients["@1"] = &ClientInfo{Conn: serverConn, Width: 80, Height: 24}
 
-	content := "first"
+	var content atomic.Value
+	content.Store("first")
 	s.OnRenderNeeded = func(clientID string, _, _ int) *RenderPayload {
-		return &RenderPayload{Content: content}
+		return &RenderPayload{Content: content.Load().(string)}
 	}
 
 	received := make(chan []byte, 10)
@@ -175,7 +177,7 @@ func TestSendRenderToClient_SendsOnContentChange(t *testing.T) {
 	time.Sleep(s.renderBatchDelay + 20*time.Millisecond)
 
 	// Second render with different content
-	content = "second"
+	content.Store("second")
 	s.SendRenderToClient("@1")
 	time.Sleep(s.renderBatchDelay + 50*time.Millisecond)
 
@@ -190,11 +192,11 @@ func TestSendRenderToClient_SequenceNumberIncremented(t *testing.T) {
 
 	s.clients["@1"] = &ClientInfo{Conn: serverConn, Width: 80, Height: 24}
 
-	contentIdx := 0
+	var contentIdx atomic.Int32
 	contents := []string{"alpha", "beta"}
 	s.OnRenderNeeded = func(clientID string, _, _ int) *RenderPayload {
-		c := contents[contentIdx]
-		contentIdx++
+		idx := int(contentIdx.Add(1) - 1)
+		c := contents[idx]
 		return &RenderPayload{Content: c}
 	}
 
@@ -208,14 +210,19 @@ func TestSendRenderToClient_SequenceNumberIncremented(t *testing.T) {
 		}
 	}()
 
+	s.seqMu.Lock()
 	before := s.sequenceNum
+	s.seqMu.Unlock()
 	// First render
 	s.SendRenderToClient("@1")
 	time.Sleep(s.renderBatchDelay + 20*time.Millisecond)
 	// Second render with different content
 	s.SendRenderToClient("@1")
 	time.Sleep(s.renderBatchDelay + 50*time.Millisecond)
-	assert.Greater(t, s.sequenceNum, before)
+	s.seqMu.Lock()
+	after := s.sequenceNum
+	s.seqMu.Unlock()
+	assert.Greater(t, after, before)
 }
 
 func TestRenderBatching_CoalescesMultipleRequests(t *testing.T) {
@@ -226,10 +233,10 @@ func TestRenderBatching_CoalescesMultipleRequests(t *testing.T) {
 
 	s.clients["@1"] = &ClientInfo{Conn: serverConn, Width: 80, Height: 24}
 
-	renderCount := 0
+	var renderCount atomic.Int32
 	s.OnRenderNeeded = func(clientID string, _, _ int) *RenderPayload {
-		renderCount++
-		return &RenderPayload{Content: fmt.Sprintf("render-%d", renderCount)}
+		count := renderCount.Add(1)
+		return &RenderPayload{Content: fmt.Sprintf("render-%d", count)}
 	}
 
 	go func() {
@@ -251,7 +258,7 @@ func TestRenderBatching_CoalescesMultipleRequests(t *testing.T) {
 	time.Sleep(s.renderBatchDelay + 20*time.Millisecond)
 
 	// Only one render should have been executed
-	assert.Equal(t, 1, renderCount, "batching should coalesce 5 requests into 1 render")
+	assert.Equal(t, int32(1), renderCount.Load(), "batching should coalesce 5 requests into 1 render")
 }
 
 func TestRenderBatching_MultipleClientsInOneBatch(t *testing.T) {
