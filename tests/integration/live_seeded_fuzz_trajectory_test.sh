@@ -82,6 +82,11 @@ disabled_consistent() {
   [ "$system_panes" -eq 0 ]
 }
 
+window_has_sidebar() {
+  local target="$1"
+  tmx list-panes -t "$target" -F "#{pane_current_command}|#{pane_start_command}" 2>/dev/null | grep -Eq "(sidebar-renderer|sidebar)"
+}
+
 wait_current_consistency() {
   local mode
   mode="$(mode_value)"
@@ -134,6 +139,11 @@ content_pane() {
   tmx list-panes -t "$w" -F "#{pane_id}|#{pane_current_command}|#{pane_start_command}" | awk -F'|' '$2 !~ /(sidebar-renderer|sidebar|tabby-daemon|pane-header)/ && $3 !~ /(sidebar-renderer|sidebar|tabby-daemon|pane-header)/ {print $1; exit}'
 }
 
+content_pane_count() {
+  tmx list-panes -s -t "$SESSION" -F "#{pane_current_command}|#{pane_start_command}" 2>/dev/null | \
+    awk -F'|' '$1 !~ /(sidebar-renderer|sidebar|tabby-daemon|pane-header)/ && $2 !~ /(sidebar-renderer|sidebar|tabby-daemon|pane-header)/ {c++} END {print c+0}'
+}
+
 random_window() {
   local count idx
   count="$(tmx list-windows -t "$SESSION" | wc -l | tr -d ' ')"
@@ -146,10 +156,15 @@ random_window() {
 }
 
 run_op() {
-  local op="$1" target pane
+  local op="$1" target pane new_window_id
   case "$op" in
     0)
-      tmx new-window -d -t "$SESSION:" -n "fuzz-$RANDOM" >/dev/null 2>&1 || true
+      new_window_id="$(tmx new-window -d -P -F "#{window_id}" -t "$SESSION:" -n "fuzz-$RANDOM" 2>/dev/null || true)"
+      if [ -n "$new_window_id" ]; then
+        TABBY_TMUX_SOCKET="$TABBY_TMUX_SOCKET" "$PROJECT_ROOT/scripts/ensure_sidebar.sh" _ "$new_window_id" >/dev/null 2>&1 || true
+        wait_for 20 window_has_sidebar "$new_window_id" >/dev/null 2>&1 || true
+      fi
+      TABBY_TMUX_SOCKET="$TABBY_TMUX_SOCKET" "$PROJECT_ROOT/scripts/signal_sidebar.sh" >/dev/null 2>&1 || true
       ;;
     1)
       target="$(random_window)"
@@ -180,8 +195,12 @@ run_op() {
       fi
       ;;
     6)
-      target="$(random_window)"
-      pane="$(content_pane "$target")"
+      if [ "$(content_pane_count)" -gt 1 ]; then
+        target="$(random_window)"
+        pane="$(content_pane "$target")"
+      else
+        pane=""
+      fi
       if [ -n "$pane" ]; then
         tmx kill-pane -t "$pane" >/dev/null 2>&1 || true
       fi
@@ -202,6 +221,8 @@ run_op() {
 
 tmx start-server
 tmx new-session -d -s "$SESSION" -n "main"
+export TABBY_TMUX_SOCKET
+TABBY_TMUX_SOCKET="$(tmx display-message -p '#{socket_path}')"
 TERM=xterm script -q -c "TERM=xterm tmux attach-session -t '$SESSION'" "/tmp/tabby-live-fuzz-attach-$$.typescript" >/tmp/tabby-live-fuzz-attach-$$.log 2>&1 &
 CLIENT_PID=$!
 wait_for 40 bash -lc "tmux -L '$SOCKET' -f /dev/null list-clients -F '#{session_name}' | grep -qx '$SESSION'"

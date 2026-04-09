@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -63,6 +64,8 @@ type Pane struct {
 	Busy         bool   // Pane has a foreground process (not shell)
 	AIBusy       bool   // AI tool in this pane is actively working
 	AIInput      bool   // AI tool in this pane is waiting for user input
+	AIBell       bool   // AI tool in this pane completed and needs attention
+	InputAck     bool   // AI input was acknowledged by focusing this pane
 	Remote       bool   // Pane is running a remote connection (ssh, mosh, etc.)
 	Top          int    // Y position of pane in window layout (for visual ordering)
 	Left         int    // X position of pane in window layout (for visual ordering)
@@ -153,6 +156,33 @@ func IsAITool(command string) bool {
 	}
 	// Claude Code uses its version number as the process title (e.g., "2.1.17")
 	return semverRegex.MatchString(command)
+}
+
+// IsAIToolCommandLine checks executable names and full argv strings for a
+// configured AI tool. This catches wrappers like node -> codex and pnpm shims.
+func IsAIToolCommandLine(command, args string) bool {
+	command = strings.TrimSpace(strings.ToLower(command))
+	args = strings.TrimSpace(strings.ToLower(args))
+
+	if IsAITool(command) {
+		return true
+	}
+
+	base := path.Base(command)
+	if base != "" && IsAITool(base) {
+		return true
+	}
+
+	for tool := range aiToolCommands {
+		if tool == "" {
+			continue
+		}
+		if strings.Contains(args, "/"+tool) || strings.Contains(args, " "+tool+" ") || strings.HasSuffix(args, " "+tool) || strings.HasPrefix(args, tool+" ") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // HasSpinner returns true if the title starts with a braille pattern dot (U+2800-U+28FF),
@@ -360,8 +390,9 @@ func ListWindows() ([]Window, error) {
 			busyVal := strings.TrimSpace(parts[10])
 			busy = busyVal == "1" || busyVal == "true"
 		}
-		// Bell can be from tmux's window_bell_flag OR our custom @tabby_bell option
-		bell := parts[5] == "1"
+		// Bell is driven by Tabby-managed window or pane state.
+		// Native tmux window_bell_flag is too noisy for this sidebar workflow.
+		bell := false
 		if len(parts) >= 12 {
 			tabbyBell := strings.TrimSpace(parts[11])
 			if tabbyBell == "1" || tabbyBell == "true" {
@@ -471,7 +502,7 @@ func ListPanesForWindow(windowIndex int) ([]Pane, error) {
 		windowTarget = fmt.Sprintf("%s:%d", sessionTarget, windowIndex)
 	}
 	out, err := DefaultRunner.Run("list-panes", "-t", windowTarget, "-F",
-		"#{pane_id}\x1f#{pane_index}\x1f#{pane_active}\x1f#{pane_current_command}\x1f#{pane_title}\x1f#{pane_pid}\x1f#{pane_last_activity}\x1f#{@tabby_pane_title}\x1f#{pane_top}\x1f#{pane_left}\x1f#{pane_current_path}\x1f#{@tabby_pane_collapsed}\x1f#{@tabby_pane_prev_height}\x1f#{pane_start_command}\x1f#{pane_dead}")
+		"#{pane_id}\x1f#{pane_index}\x1f#{pane_active}\x1f#{pane_current_command}\x1f#{pane_title}\x1f#{pane_pid}\x1f#{pane_last_activity}\x1f#{@tabby_pane_title}\x1f#{pane_top}\x1f#{pane_left}\x1f#{pane_current_path}\x1f#{@tabby_pane_collapsed}\x1f#{@tabby_pane_prev_height}\x1f#{pane_start_command}\x1f#{pane_dead}\x1f#{@tabby_bell}\x1f#{@tabby_input_ack}")
 	if err != nil {
 		return nil, err
 	}
@@ -561,6 +592,16 @@ func ListPanesForWindow(windowIndex int) ([]Pane, error) {
 			collapsedVal := strings.TrimSpace(parts[11])
 			collapsed = collapsedVal == "1" || strings.EqualFold(collapsedVal, "true")
 		}
+		aiBell := false
+		if len(parts) >= 16 {
+			bellVal := strings.TrimSpace(parts[15])
+			aiBell = bellVal == "1" || strings.EqualFold(bellVal, "true")
+		}
+		inputAck := false
+		if len(parts) >= 17 {
+			ackVal := strings.TrimSpace(parts[16])
+			inputAck = ackVal == "1" || strings.EqualFold(ackVal, "true")
+		}
 		panes = append(panes, Pane{
 			ID:           parts[0],
 			Index:        index,
@@ -570,6 +611,8 @@ func ListPanesForWindow(windowIndex int) ([]Pane, error) {
 			Title:        stripANSI(parts[4]),
 			LockedTitle:  lockedTitle,
 			Busy:         busy,
+			AIBell:       aiBell,
+			InputAck:     inputAck,
 			Remote:       isRemote,
 			Top:          top,
 			Left:         left,
@@ -598,7 +641,7 @@ func ListAllPanes() (map[string][]Pane, error) {
 		args = append(args, "-a")
 	}
 	args = append(args, "-F",
-		"#{window_id}\x1f#{window_index}\x1f#{pane_id}\x1f#{pane_index}\x1f#{pane_active}\x1f#{pane_current_command}\x1f#{pane_title}\x1f#{pane_pid}\x1f#{pane_last_activity}\x1f#{@tabby_pane_title}\x1f#{pane_top}\x1f#{pane_left}\x1f#{pane_current_path}\x1f#{@tabby_pane_collapsed}\x1f#{@tabby_pane_prev_height}\x1f#{pane_start_command}\x1f#{pane_width}\x1f#{pane_height}")
+		"#{window_id}\x1f#{window_index}\x1f#{pane_id}\x1f#{pane_index}\x1f#{pane_active}\x1f#{pane_current_command}\x1f#{pane_title}\x1f#{pane_pid}\x1f#{pane_last_activity}\x1f#{@tabby_pane_title}\x1f#{pane_top}\x1f#{pane_left}\x1f#{pane_current_path}\x1f#{@tabby_pane_collapsed}\x1f#{@tabby_pane_prev_height}\x1f#{pane_start_command}\x1f#{pane_width}\x1f#{pane_height}\x1f#{@tabby_bell}\x1f#{@tabby_input_ack}")
 	out, err := DefaultRunner.Run(args...)
 	if err != nil {
 		return nil, err
@@ -620,24 +663,24 @@ func ListAllPanes() (map[string][]Pane, error) {
 
 		// Preferred format includes window_id as field 0.
 		// Fallback format (legacy/tests) omits window_id and starts with window_index.
-		newFormat := len(parts) >= 18
+		newFormat := len(parts) >= 19
 		windowID := ""
 		var paneIDField, paneIndexField, paneActiveField int
 		var cmdField, titleField, pidField, lastActivityField int
 		var lockedTitleField, topField, leftField, pathField int
-		var collapsedField, startCommandField, widthField, heightField int
+		var collapsedField, startCommandField, widthField, heightField, bellField, inputAckField int
 		if newFormat {
 			windowID = strings.TrimSpace(parts[0])
 			paneIDField, paneIndexField, paneActiveField = 2, 3, 4
 			cmdField, titleField, pidField, lastActivityField = 5, 6, 7, 8
 			lockedTitleField, topField, leftField, pathField = 9, 10, 11, 12
-			collapsedField, startCommandField, widthField, heightField = 13, 15, 16, 17
+			collapsedField, startCommandField, widthField, heightField, bellField, inputAckField = 13, 15, 16, 17, 18, 19
 		} else {
 			windowID = legacyWindowIndexKey(parts[0])
 			paneIDField, paneIndexField, paneActiveField = 1, 2, 3
 			cmdField, titleField, pidField, lastActivityField = 4, 5, 6, 7
 			lockedTitleField, topField, leftField, pathField = 8, 9, 10, 11
-			collapsedField, startCommandField, widthField, heightField = 12, 14, 15, 16
+			collapsedField, startCommandField, widthField, heightField, bellField, inputAckField = 12, 14, 15, 16, 17, -1
 		}
 		if windowID == "" {
 			continue
@@ -733,6 +776,18 @@ func ListAllPanes() (map[string][]Pane, error) {
 			collapsedVal := strings.TrimSpace(parts[collapsedField])
 			if collapsedVal == "1" || collapsedVal == "true" {
 				pane.Collapsed = true
+			}
+		}
+		if len(parts) > bellField {
+			bellVal := strings.TrimSpace(parts[bellField])
+			if bellVal == "1" || strings.EqualFold(bellVal, "true") {
+				pane.AIBell = true
+			}
+		}
+		if inputAckField >= 0 && len(parts) > inputAckField {
+			ackVal := strings.TrimSpace(parts[inputAckField])
+			if ackVal == "1" || strings.EqualFold(ackVal, "true") {
+				pane.InputAck = true
 			}
 		}
 

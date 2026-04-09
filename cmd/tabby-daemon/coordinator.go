@@ -261,9 +261,10 @@ type Coordinator struct {
 	// AI tool state tracking — per-pane (for busy→idle transition detection)
 	prevPaneBusy       map[string]bool   // pane ID → was AI tool busy last cycle
 	prevPaneTitle      map[string]string // pane ID → AI pane title last cycle
+	aiInputActive      map[string]bool   // pane ID → waiting-for-input should persist until ack/busy
 	hookPaneActive     map[string]bool   // pane ID → hooks detected (seen @tabby_busy=1)
 	hookPaneBusyIdleAt map[string]int64  // pane ID → unix timestamp when hook-busy but process looks idle
-	aiBellUntil        map[int]int64     // window index → unix timestamp when bell expires (window-level)
+	aiBellUntil        map[string]int64  // pane ID → unix timestamp when bell expires
 
 	// Callback to sync sidebar client widths in the server's client map
 	// Called during expand_sidebar to update server-side Width before BroadcastRender
@@ -733,7 +734,8 @@ func NewCoordinator(sessionID string) *Coordinator {
 		lastPaneMenuOpen:   make(map[string]time.Time),
 		prevPaneBusy:       make(map[string]bool),
 		prevPaneTitle:      make(map[string]string),
-		aiBellUntil:        make(map[int]int64),
+		aiInputActive:      make(map[string]bool),
+		aiBellUntil:        make(map[string]int64),
 		hookPaneActive:     make(map[string]bool),
 		hookPaneBusyIdleAt: make(map[string]int64),
 		lastWidth:          25, // Default width for pet physics
@@ -999,6 +1001,9 @@ func (c *Coordinator) getHandleColor() string {
 // GetTerminalBg returns terminal background color from config, theme, or detector
 func (c *Coordinator) GetTerminalBg() string {
 	if c.config.PaneHeader.TerminalBg != "" {
+		if strings.EqualFold(c.config.PaneHeader.TerminalBg, "transparent") {
+			return ""
+		}
 		return c.config.PaneHeader.TerminalBg
 	}
 	if c.theme != nil {
@@ -1478,10 +1483,14 @@ func (c *Coordinator) RefreshWindows() {
 
 	// Execute deferred AI tool state tmux set-option ops outside the lock.
 	for _, op := range aiToolOps {
+		scopeFlag := "-w"
+		if op.pane {
+			scopeFlag = "-p"
+		}
 		if op.unset {
-			tmuxRun("set-option", "-w", "-t", op.windowID, "-u", op.key)
+			tmuxRun("set-option", scopeFlag, "-t", op.windowID, "-u", op.key)
 		} else {
-			tmuxRun("set-option", "-w", "-t", op.windowID, op.key, op.value)
+			tmuxRun("set-option", scopeFlag, "-t", op.windowID, op.key, op.value)
 		}
 	}
 
@@ -1516,6 +1525,7 @@ func (c *Coordinator) SetActiveWindowOptimistic(windowID string) {
 // for deferred execution after the lock is released.
 type tmuxSetOption struct {
 	windowID string
+	pane     bool
 	key      string
 	value    string // value to set (ignored when unset=true)
 	unset    bool   // true means use -u flag to unset the option
@@ -1536,7 +1546,7 @@ type tmuxSetOption struct {
 // State machine per pane:
 //   - Currently busy -> Busy indicator (animated spinner)
 //   - Was busy, now idle (tool still running) -> Input indicator (needs user input)
-//   - AI tool exited (was present, now gone) -> Bell indicator at window level
+//   - AI tool exited (was present, now gone) -> Bell indicator on that pane
 //   - Was idle, still idle -> no indicator
 func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOption {
 	var pending []tmuxSetOption
@@ -1584,23 +1594,27 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			if isAuxiliaryPane(win.Panes[j]) {
 				continue
 			}
-			if tmux.IsAITool(win.Panes[j].Command) {
+			if isAIPane(win.Panes[j], pt) {
 				aiPanes = append(aiPanes, &win.Panes[j])
 			}
 		}
 
-		// Check for expiring bell indicators (window-level, from AI tool exit)
-		if expiry, ok := c.aiBellUntil[idx]; ok {
-			if now < expiry {
-				win.Bell = true
-			} else {
-				delete(c.aiBellUntil, idx)
+		for j := range win.Panes {
+			if isAuxiliaryPane(win.Panes[j]) {
+				continue
+			}
+			pid := win.Panes[j].ID
+			if expiry, ok := c.aiBellUntil[pid]; ok {
+				if now < expiry {
+					win.Panes[j].AIBell = true
+				} else {
+					delete(c.aiBellUntil, pid)
+				}
 			}
 		}
 
 		if len(aiPanes) == 0 {
 			// No AI tool in this window.
-			// Check if any pane in this window WAS an AI tool last cycle (tool exited).
 			anyPrevAI := false
 			for j := range win.Panes {
 				if isAuxiliaryPane(win.Panes[j]) {
@@ -1609,17 +1623,91 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 				pid := win.Panes[j].ID
 				if c.prevPaneBusy[pid] || c.prevPaneTitle[pid] != "" {
 					anyPrevAI = true
+					break
+				}
+			}
+
+			// If a hook already marked this window as needing input, preserve that
+			// state even after the foreground process returns to a shell. The input
+			// marker is only acknowledged when the user focuses the pane.
+			activePaneAcked := false
+			activePaneID := ""
+			for j := range win.Panes {
+				if isAuxiliaryPane(win.Panes[j]) {
+					continue
+				}
+				if win.Panes[j].Active {
+					activePaneID = win.Panes[j].ID
+					activePaneAcked = win.Panes[j].InputAck
+					break
+				}
+			}
+			if win.Input && anyPrevAI {
+				for j := range win.Panes {
+					if isAuxiliaryPane(win.Panes[j]) {
+						continue
+					}
+					pid := win.Panes[j].ID
 					delete(c.prevPaneBusy, pid)
 					delete(c.prevPaneTitle, pid)
 					delete(c.hookPaneActive, pid)
 					delete(c.hookPaneBusyIdleAt, pid)
 				}
+				if activePaneAcked {
+					pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_input", unset: true})
+					if activePaneID != "" {
+						pending = append(pending, tmuxSetOption{windowID: activePaneID, pane: true, key: "@tabby_input_ack", unset: true})
+					}
+					win.Input = false
+				} else {
+					if win.Busy {
+						pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_busy", unset: true})
+						win.Busy = false
+					}
+					win.Bell = false
+					for j := range win.Panes {
+						if isAuxiliaryPane(win.Panes[j]) {
+							continue
+						}
+						win.Panes[j].AIBell = false
+					}
+					continue
+				}
+			}
+
+			// Check if any pane in this window WAS an AI tool last cycle (tool exited).
+			anyPrevAI = false
+			for j := range win.Panes {
+				if isAuxiliaryPane(win.Panes[j]) {
+					continue
+				}
+				pid := win.Panes[j].ID
+				if c.prevPaneBusy[pid] || c.prevPaneTitle[pid] != "" || c.aiInputActive[pid] {
+					anyPrevAI = true
+					delete(c.prevPaneBusy, pid)
+					delete(c.prevPaneTitle, pid)
+					delete(c.aiInputActive, pid)
+					delete(c.hookPaneActive, pid)
+					delete(c.hookPaneBusyIdleAt, pid)
+				}
 			}
 			if anyPrevAI {
-				win.Bell = true
+				for j := range win.Panes {
+					if isAuxiliaryPane(win.Panes[j]) {
+						continue
+					}
+					pid := win.Panes[j].ID
+					if win.Panes[j].Command == "" || isAIPane(win.Panes[j], pt) {
+						continue
+					}
+					if win.Panes[j].AIBell {
+						continue
+					}
+					win.Panes[j].AIBell = true
+					c.aiBellUntil[pid] = now + 30
+					pending = append(pending, tmuxSetOption{windowID: pid, pane: true, key: "@tabby_bell", value: "1"})
+				}
 				win.Input = false
-				c.aiBellUntil[idx] = now + 30
-				pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_bell", value: "1"})
 				pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_input", value: ""})
 			}
 			// Clear stale hook indicators on windows with no AI tools.
@@ -1634,13 +1722,25 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 				pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_input", unset: true})
 				win.Input = false
 			}
+			anyPaneBell := false
+			for j := range win.Panes {
+				if isAuxiliaryPane(win.Panes[j]) {
+					continue
+				}
+				if win.Panes[j].AIBell {
+					anyPaneBell = true
+				}
+			}
+			if multiPane {
+				if win.Collapsed {
+					win.Bell = anyPaneBell
+				} else {
+					win.Bell = false
+				}
+			} else {
+				win.Bell = anyPaneBell
+			}
 			continue
-		}
-
-		// If this is the active window, clear window-level input indicator
-		if win.Active && win.Input {
-			win.Input = false
-			pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_input", unset: true})
 		}
 
 		// === Per-pane AI detection ===
@@ -1662,7 +1762,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 
 		// Hook-based input: @tabby_input at window level -> attribute to active AI pane or first
 		hookInputPaneID := ""
-		if win.Input && !win.Active {
+		if win.Input {
 			for _, p := range aiPanes {
 				if tmux.HasIdleIcon(p.Title) {
 					hookInputPaneID = p.ID
@@ -1715,22 +1815,42 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			if win.Busy && pid == hookBusyPaneID {
 				// Hook says this pane is busy
 				c.hookPaneActive[pid] = true
+				if pane.AIBell {
+					pending = append(pending, tmuxSetOption{windowID: pid, pane: true, key: "@tabby_bell", unset: true})
+				}
+				if pane.InputAck {
+					pending = append(pending, tmuxSetOption{windowID: pid, pane: true, key: "@tabby_input_ack", unset: true})
+					pane.InputAck = false
+				}
 				pane.AIBusy = true
 				pane.AIInput = false
+				delete(c.aiInputActive, pid)
 				if !c.prevPaneBusy[pid] {
 					coordinatorDebugLog.Printf("[AI] Pane %s (win %d, %s): -> BUSY (hook)",
 						pid, idx, pane.Command)
 				}
 				c.prevPaneBusy[pid] = true
-				delete(c.aiBellUntil, idx)
+				delete(c.aiBellUntil, pid)
+				pane.AIBell = false
 				c.prevPaneTitle[pid] = pane.Title
 				continue
 			}
 
 			if pid == hookInputPaneID {
 				// Hook says this pane needs input
-				pane.AIInput = true
+				if pane.AIBell {
+					pending = append(pending, tmuxSetOption{windowID: pid, pane: true, key: "@tabby_bell", unset: true})
+				}
+				if pane.InputAck {
+					pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_input", unset: true})
+					pane.AIInput = false
+					delete(c.aiInputActive, pid)
+				} else {
+					pane.AIInput = true
+					c.aiInputActive[pid] = true
+				}
 				pane.AIBusy = false
+				pane.AIBell = false
 				c.prevPaneBusy[pid] = false
 				c.prevPaneTitle[pid] = pane.Title
 				continue
@@ -1744,6 +1864,9 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 						pid, idx, pane.Command)
 				}
 				pane.AIBusy = false
+				if c.aiInputActive[pid] && !pane.InputAck {
+					pane.AIInput = true
+				}
 				c.prevPaneBusy[pid] = false
 				c.prevPaneTitle[pid] = pane.Title
 				continue
@@ -1777,21 +1900,45 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			wasBusy := c.prevPaneBusy[pid]
 
 			if busy {
+				if pane.AIBell {
+					pending = append(pending, tmuxSetOption{windowID: pid, pane: true, key: "@tabby_bell", unset: true})
+				}
+				if pane.InputAck {
+					pending = append(pending, tmuxSetOption{windowID: pid, pane: true, key: "@tabby_input_ack", unset: true})
+					pane.InputAck = false
+				}
 				pane.AIBusy = true
 				pane.AIInput = false
+				pane.AIBell = false
+				delete(c.aiInputActive, pid)
 				c.prevPaneBusy[pid] = true
-				delete(c.aiBellUntil, idx)
+				delete(c.aiBellUntil, pid)
 				if !wasBusy {
 					coordinatorDebugLog.Printf("[AI] Pane %s (win %d, %s): -> BUSY (spinner=%v titleChanged=%v)",
 						pid, idx, pane.Command, hasSpinner, hasPrev && pane.Title != prevTitle)
 				}
 			} else if wasBusy {
 				// busy -> idle: tool waiting for user input
-				pane.AIInput = true
+				if pane.AIBell {
+					pending = append(pending, tmuxSetOption{windowID: pid, pane: true, key: "@tabby_bell", unset: true})
+				}
+				pane.AIInput = !pane.InputAck
 				pane.AIBusy = false
+				pane.AIBell = false
+				if pane.AIInput {
+					c.aiInputActive[pid] = true
+				} else {
+					delete(c.aiInputActive, pid)
+				}
 				c.prevPaneBusy[pid] = false
 				coordinatorDebugLog.Printf("[AI] Pane %s (win %d, %s): BUSY -> INPUT (title=%q)",
 					pid, idx, pane.Command, pane.Title)
+			} else if c.aiInputActive[pid] && !pane.InputAck {
+				pane.AIInput = true
+				pane.AIBusy = false
+				pane.AIBell = false
+			} else if pane.InputAck {
+				delete(c.aiInputActive, pid)
 			} else if !hasPrev {
 				coordinatorDebugLog.Printf("[AI] Pane %s (win %d, %s): FIRST SEEN (title=%q)",
 					pid, idx, pane.Command, pane.Title)
@@ -1808,16 +1955,21 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			if pane.AIBusy {
 				win.Busy = true
 				win.Input = false
-			} else if pane.AIInput && !win.Active {
+			} else if pane.AIInput {
 				win.Input = true
 				win.Busy = false
+			} else {
+				win.Busy = false
+				win.Input = false
 			}
+			win.Bell = pane.AIBell
 		} else if multiPane {
 			// Multi-pane: clear window-level busy/input (indicators are on pane lines)
 			// But if the window had @tabby_busy from hooks, we already handled it above.
 			// Only clear the window-level flags that were set by passive detection.
 			anyPaneBusy := false
 			anyPaneInput := false
+			anyPaneBell := false
 			for _, p := range aiPanes {
 				if p.AIBusy {
 					anyPaneBusy = true
@@ -1825,26 +1977,23 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 				if p.AIInput {
 					anyPaneInput = true
 				}
+				if p.AIBell {
+					anyPaneBell = true
+				}
 			}
 			// For collapsed multi-pane: aggregate to window level
 			if win.Collapsed {
 				win.Busy = anyPaneBusy
-				if !anyPaneBusy && anyPaneInput && !win.Active {
+				win.Input = false
+				if !anyPaneBusy && anyPaneInput {
 					win.Input = true
 				}
+				win.Bell = anyPaneBell
 			} else {
-				// Expanded multi-pane: no window-level busy/input (pane lines show it)
+				// Expanded multi-pane: no window-level busy/input/bell (pane lines show it)
 				win.Busy = false
 				win.Input = false
-			}
-		}
-
-		// Clear window-level input for active panes in active window
-		if win.Active && multiPane {
-			for _, pane := range aiPanes {
-				if pane.Active {
-					pane.AIInput = false
-				}
+				win.Bell = false
 			}
 		}
 	}
@@ -1854,8 +2003,10 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 		if !seenPanes[pid] {
 			delete(c.prevPaneBusy, pid)
 			delete(c.prevPaneTitle, pid)
+			delete(c.aiInputActive, pid)
 			delete(c.hookPaneActive, pid)
 			delete(c.hookPaneBusyIdleAt, pid)
+			delete(c.aiBellUntil, pid)
 		}
 	}
 	for pid := range c.prevPaneTitle {
@@ -1869,8 +2020,10 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 // processTree holds pre-parsed process table data for CPU-based busy detection.
 // Call loadProcessTree() once per cycle and reuse for all windows.
 type processTree struct {
-	children map[int][]int   // ppid -> child pids
-	cpuByPID map[int]float64 // pid -> cpu%
+	children  map[int][]int   // ppid -> child pids
+	cpuByPID  map[int]float64 // pid -> cpu%
+	commByPID map[int]string  // pid -> executable/comm
+	argsByPID map[int]string  // pid -> full argv
 }
 
 // loadProcessTree reads the system process table once. Returns nil on error.
@@ -1880,17 +2033,19 @@ func loadProcessTree() *processTree {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=,ppid=,%cpu=").Output()
+	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=,ppid=,%cpu=,comm=,args=").Output()
 	if err != nil {
 		return nil
 	}
 	pt := &processTree{
-		children: make(map[int][]int),
-		cpuByPID: make(map[int]float64),
+		children:  make(map[int][]int),
+		cpuByPID:  make(map[int]float64),
+		commByPID: make(map[int]string),
+		argsByPID: make(map[int]string),
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 3 {
+		if len(fields) < 5 {
 			continue
 		}
 		pid, err1 := strconv.Atoi(fields[0])
@@ -1901,6 +2056,8 @@ func loadProcessTree() *processTree {
 		}
 		pt.children[ppid] = append(pt.children[ppid], pid)
 		pt.cpuByPID[pid] = cpu
+		pt.commByPID[pid] = fields[3]
+		pt.argsByPID[pid] = strings.Join(fields[4:], " ")
 	}
 	return pt
 }
@@ -1926,6 +2083,37 @@ func (pt *processTree) treeCPU(pid int) float64 {
 		total += pt.cpuByPID[p]
 	}
 	return total
+}
+
+func (pt *processTree) subtreeHasAITool(pid int) bool {
+	if pt == nil || pid <= 0 {
+		return false
+	}
+	visited := make(map[int]bool)
+	queue := []int{pid}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if visited[cur] {
+			continue
+		}
+		visited[cur] = true
+		if tmux.IsAIToolCommandLine(pt.commByPID[cur], pt.argsByPID[cur]) {
+			return true
+		}
+		queue = append(queue, pt.children[cur]...)
+	}
+	return false
+}
+
+func isAIPane(pane tmux.Pane, pt *processTree) bool {
+	if tmux.IsAIToolCommandLine(pane.Command, pane.StartCommand) {
+		return true
+	}
+	if pane.PID > 0 && pt != nil && pt.subtreeHasAITool(pane.PID) {
+		return true
+	}
+	return false
 }
 
 // computeVisualPositions builds a map of window ID -> visual position in the
@@ -2188,10 +2376,7 @@ func (c *Coordinator) applyThemeToTmux() {
 		if baseFg == "" {
 			baseFg = "#ffffff" // Default white
 		}
-		baseBg := c.theme.TerminalBg
-		if baseBg == "" {
-			baseBg = c.theme.SidebarBg
-		}
+		baseBg := c.GetTerminalBg()
 
 		// Dim the foreground color for inactive panes
 		dimFg := dimColor(baseFg, dimOpacity)
@@ -2200,6 +2385,7 @@ func (c *Coordinator) applyThemeToTmux() {
 		if baseBg != "" {
 			inactiveStyle += fmt.Sprintf(",bg=%s", baseBg)
 		}
+		exec.Command("tmux", "set-option", "-gu", "window-style").Run()
 		exec.Command("tmux", "set-option", "-g", "window-style", inactiveStyle).Run()
 
 		// Active pane gets full brightness
@@ -2207,6 +2393,7 @@ func (c *Coordinator) applyThemeToTmux() {
 		if baseBg != "" {
 			activeStyle += fmt.Sprintf(",bg=%s", baseBg)
 		}
+		exec.Command("tmux", "set-option", "-gu", "window-active-style").Run()
 		exec.Command("tmux", "set-option", "-g", "window-active-style", activeStyle).Run()
 	}
 }
@@ -2217,11 +2404,7 @@ func (c *Coordinator) ApplyThemeToPane(paneID string) {
 		return
 	}
 
-	// Use TerminalBg from theme, or fall back to SidebarBg
-	bg := c.theme.TerminalBg
-	if bg == "" {
-		bg = c.theme.SidebarBg
-	}
+	bg := c.GetTerminalBg()
 
 	coordinatorDebugLog.Printf("ApplyThemeToPane: pane=%s bg=%s", paneID, bg)
 
@@ -2231,7 +2414,11 @@ func (c *Coordinator) ApplyThemeToPane(paneID string) {
 		style := fmt.Sprintf("bg=%s", bg)
 		exec.Command("tmux", "set-option", "-p", "-t", paneID, "window-style", style).Run()
 		exec.Command("tmux", "set-option", "-p", "-t", paneID, "window-active-style", style).Run()
+		return
 	}
+
+	exec.Command("tmux", "set-option", "-p", "-u", "-t", paneID, "window-style").Run()
+	exec.Command("tmux", "set-option", "-p", "-u", "-t", paneID, "window-active-style").Run()
 }
 
 // buildPaneHeaderColorArgs builds the tmux set-option args for pane header colors.
@@ -2319,7 +2506,7 @@ func (c *Coordinator) buildPaneHeaderColorArgs() []string {
 					if opacity <= 0 || opacity > 1 {
 						opacity = 0.6
 					}
-					tBg := c.config.PaneHeader.TerminalBg
+					tBg := c.GetTerminalBg()
 					iFg = desaturateHex(iFg, opacity, tBg)
 					iBg = desaturateHex(iBg, opacity, tBg)
 				}
@@ -2348,7 +2535,7 @@ func (c *Coordinator) buildPaneHeaderColorArgs() []string {
 						if opacity <= 0 || opacity > 1 {
 							opacity = 0.6
 						}
-						tBg := c.config.PaneHeader.TerminalBg
+						tBg := c.GetTerminalBg()
 						iFg = desaturateHex(iFg, opacity, tBg)
 						iBg = desaturateHex(iBg, opacity, tBg)
 					}
@@ -4303,10 +4490,8 @@ func (c *Coordinator) RenderForClient(clientID string, width, height int) *daemo
 
 	sidebarBg := ""
 	terminalBg := ""
-	if c.theme != nil {
-		sidebarBg = c.theme.SidebarBg
-		terminalBg = c.theme.TerminalBg
-	}
+	sidebarBg = c.GetSidebarBg()
+	terminalBg = c.GetTerminalBg()
 
 	return &daemon.RenderPayload{
 		Content:       fullContent,
@@ -4529,7 +4714,7 @@ func (c *Coordinator) RenderHeaderForClient(clientID string, width, height int) 
 			if opacity <= 0 || opacity > 1 {
 				opacity = 0.6
 			}
-			tBg := c.config.PaneHeader.TerminalBg
+			tBg := c.GetTerminalBg()
 			headerBg = desaturateHex(headerBg, opacity, tBg)
 			headerFg = desaturateHex(headerFg, opacity, tBg)
 		}
@@ -4918,10 +5103,8 @@ func (c *Coordinator) RenderHeaderForClient(clientID string, width, height int) 
 
 	sidebarBg := ""
 	terminalBg := ""
-	if c.theme != nil {
-		sidebarBg = c.theme.SidebarBg
-		terminalBg = c.theme.TerminalBg
-	}
+	sidebarBg = c.GetSidebarBg()
+	terminalBg = c.GetTerminalBg()
 
 	return &daemon.RenderPayload{
 		Content:    line,
@@ -5177,6 +5360,7 @@ func (c *Coordinator) generateSidebarHeader(width int, clientID string) (string,
 	if fgColor == "" {
 		fgColor = c.getHeaderTextColorWithFallback("")
 	}
+	bgColor = normalizeTransparentColor(bgColor)
 
 	// Build style
 	headerStyle := lipgloss.NewStyle().
@@ -5382,6 +5566,9 @@ func (c *Coordinator) generateMainContent(clientID string, width, height int) (s
 		// Render group header
 		{
 			bg := theme.Bg
+			if c.useTransparentSidebarBackground() {
+				bg = ""
+			}
 			if strings.EqualFold(bg, "transparent") {
 				bg = ""
 			}
@@ -5562,6 +5749,10 @@ func (c *Coordinator) generateMainContent(clientID string, width, height int) (s
 				bgColor = theme.Bg
 				fgColor = inactiveFg
 			}
+			if c.useTransparentSidebarBackground() {
+				bgColor = ""
+			}
+			bgColor = normalizeTransparentColor(bgColor)
 			// Build style
 			style := lipgloss.NewStyle()
 			if fgColor != "" {
@@ -5593,12 +5784,12 @@ func (c *Coordinator) generateMainContent(clientID string, width, height int) (s
 				} else {
 					alertIcon = alertStyle.Render(inputIcon)
 				}
-			} else if !isActive {
-				if ind.Bell.Enabled && win.Bell {
-					alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ind.Bell.Color))
+			} else if ind.Bell.Enabled && win.Bell {
+				alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ind.Bell.Color))
 
-					alertIcon = alertStyle.Render(c.getIndicatorIcon(ind.Bell))
-				} else if ind.Activity.Enabled && win.Activity {
+				alertIcon = alertStyle.Render(c.getIndicatorIcon(ind.Bell))
+			} else if !isActive {
+				if ind.Activity.Enabled && win.Activity {
 					alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ind.Activity.Color))
 
 					alertIcon = alertStyle.Render(c.getIndicatorIcon(ind.Activity))
@@ -5900,7 +6091,7 @@ func (c *Coordinator) generateMainContent(clientID string, width, height int) (s
 						paneActiveIndicator = "█"
 					}
 
-					// Per-pane alert indicator (busy/input for multi-pane windows)
+					// Per-pane alert indicator (busy/input/bell for multi-pane windows)
 					paneAlertIcon := ""
 					pInd := c.config.Indicators
 					if pane.AIBusy && pInd.Busy.Enabled {
@@ -5918,6 +6109,9 @@ func (c *Coordinator) generateMainContent(clientID string, width, height int) (s
 						} else {
 							paneAlertIcon = alertStyle.Render(inputIcon)
 						}
+					} else if pane.AIBell && pInd.Bell.Enabled {
+						alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(pInd.Bell.Color))
+						paneAlertIcon = alertStyle.Render(c.getIndicatorIcon(pInd.Bell))
 					} else if pane.Busy && pInd.Busy.Enabled && !tmux.IsAITool(pane.Command) && !anyAIBusyA {
 						// Non-AI pane with foreground process; suppress when AI is busy in same window
 						alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(pInd.Busy.Color))
@@ -5936,6 +6130,10 @@ func (c *Coordinator) generateMainContent(clientID string, width, height int) (s
 					} else {
 						paneLineBg = theme.Bg
 					}
+					if c.useTransparentSidebarBackground() {
+						paneLineBg = ""
+					}
+					paneLineBg = normalizeTransparentColor(paneLineBg)
 
 					// Build prefix (tree parts) and content separately
 					// bg color extends from start of pane name to the right edge
@@ -6119,6 +6317,10 @@ func (c *Coordinator) generatePrefixModeContent(clientID string, width, height i
 			bgColor = theme.Bg
 			fgColor = inactiveFg
 		}
+		if c.useTransparentSidebarBackground() {
+			bgColor = ""
+		}
+		bgColor = normalizeTransparentColor(bgColor)
 
 		// Build style
 		style := lipgloss.NewStyle()
@@ -6151,12 +6353,12 @@ func (c *Coordinator) generatePrefixModeContent(clientID string, width, height i
 			} else {
 				alertIcon = alertStyle.Render(inputIcon)
 			}
-		} else if !isActive {
-			if ind.Bell.Enabled && win.Bell {
-				alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ind.Bell.Color))
+		} else if ind.Bell.Enabled && win.Bell {
+			alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ind.Bell.Color))
 
-				alertIcon = alertStyle.Render(c.getIndicatorIcon(ind.Bell))
-			} else if ind.Activity.Enabled && win.Activity {
+			alertIcon = alertStyle.Render(c.getIndicatorIcon(ind.Bell))
+		} else if !isActive {
+			if ind.Activity.Enabled && win.Activity {
 				alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ind.Activity.Color))
 
 				alertIcon = alertStyle.Render(c.getIndicatorIcon(ind.Activity))
@@ -6243,6 +6445,10 @@ func (c *Coordinator) generatePrefixModeContent(clientID string, width, height i
 			if effectiveBg == "" {
 				effectiveBg = theme.Bg
 			}
+			if c.useTransparentSidebarBackground() {
+				effectiveBg = ""
+			}
+			effectiveBg = normalizeTransparentColor(effectiveBg)
 
 			var lineContent string
 			if hasPanes {
@@ -6406,6 +6612,9 @@ func (c *Coordinator) generatePrefixModeContent(clientID string, width, height i
 					} else {
 						paneAlertIcon = alertStyle.Render(inputIcon)
 					}
+				} else if pane.AIBell && pInd.Bell.Enabled {
+					alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(pInd.Bell.Color))
+					paneAlertIcon = alertStyle.Render(c.getIndicatorIcon(pInd.Bell))
 				} else if pane.Busy && pInd.Busy.Enabled && !tmux.IsAITool(pane.Command) && !anyAIBusyB {
 					// Non-AI pane with foreground process; suppress when AI is busy in same window
 					alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(pInd.Busy.Color))
@@ -6424,7 +6633,14 @@ func (c *Coordinator) generatePrefixModeContent(clientID string, width, height i
 				} else {
 					paneLineBg = theme.Bg
 				}
-				paneLineStyle := lipgloss.NewStyle().Background(lipgloss.Color(paneLineBg)).Width(width)
+				if c.useTransparentSidebarBackground() {
+					paneLineBg = ""
+				}
+				paneLineBg = normalizeTransparentColor(paneLineBg)
+				paneLineStyle := lipgloss.NewStyle().Width(width)
+				if paneLineBg != "" {
+					paneLineStyle = paneLineStyle.Background(lipgloss.Color(paneLineBg))
+				}
 
 				if pane.Active && isActive {
 					var paneIndicatorBg, paneIndicatorFg string
@@ -10847,6 +11063,9 @@ func randomThought(category string) string {
 func (c *Coordinator) GetSidebarBg() string {
 	// Config override takes priority
 	if c.config.Sidebar.Colors.Bg != "" {
+		if strings.EqualFold(c.config.Sidebar.Colors.Bg, "transparent") {
+			return ""
+		}
 		return c.config.Sidebar.Colors.Bg
 	}
 	// Then use theme
@@ -10855,6 +11074,17 @@ func (c *Coordinator) GetSidebarBg() string {
 	}
 	// Fallback to detector
 	return c.bgDetector.GetDefaultSidebarBg()
+}
+
+func normalizeTransparentColor(color string) string {
+	if strings.EqualFold(color, "transparent") {
+		return ""
+	}
+	return color
+}
+
+func (c *Coordinator) useTransparentSidebarBackground() bool {
+	return c.GetSidebarBg() == ""
 }
 
 // applyBackgroundFill applies the sidebar background color to all content lines

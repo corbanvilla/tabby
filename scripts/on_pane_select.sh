@@ -17,6 +17,12 @@ if [ "$SPAWNING" = "1" ]; then
     exit 0
 fi
 
+# A pane-level AI completion bell is acknowledged when that pane is focused.
+tmux set-option -p -u @tabby_bell 2>/dev/null || true
+# A pane-level AI input marker is acknowledged when that pane is focused.
+# The daemon will keep it cleared until the tool becomes busy again.
+tmux set-option -p @tabby_input_ack 1 2>/dev/null || true
+
 # Signal daemon to refresh immediately
 DAEMON_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
 if [ -f "$DAEMON_PID_FILE" ]; then

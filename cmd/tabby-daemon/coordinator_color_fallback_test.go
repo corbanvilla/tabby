@@ -206,11 +206,28 @@ func TestGetTerminalBg_ConfigWins(t *testing.T) {
 	assert.Equal(t, "#1e1e1e", c.GetTerminalBg())
 }
 
+func TestGetTerminalBg_TransparentConfigMeansNoBackground(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.PaneHeader.TerminalBg = "transparent"
+	assert.Equal(t, "", c.GetTerminalBg())
+}
+
+func TestDesaturateHex_WithLightTerminalBackground(t *testing.T) {
+	got := desaturateHex("#286983", 0.72, "#fdf6e3")
+	assert.NotEqual(t, "#000000", got)
+}
+
 func TestGetTerminalBg_ThemeWins(t *testing.T) {
 	c := newTestCoordinator(t)
 	th := colors.GetTheme("dark")
 	c.theme = &th
 	assert.Equal(t, th.TerminalBg, c.GetTerminalBg())
+}
+
+func TestGetSidebarBg_TransparentConfigMeansNoBackground(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Sidebar.Colors.Bg = "transparent"
+	assert.Equal(t, "", c.GetSidebarBg())
 }
 
 func TestGetDividerFg_ConfigWins(t *testing.T) {

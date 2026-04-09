@@ -237,7 +237,7 @@ func clearPaneDimFlag(paneID string) {
 }
 
 func computeDimBG(terminalBG string, opacity float64) string {
-	if terminalBG == "" {
+	if terminalBG == "" || strings.EqualFold(terminalBG, "transparent") {
 		return ""
 	}
 	tbR, tbG, tbB := parseHex(terminalBG)

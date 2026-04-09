@@ -63,6 +63,9 @@ func main() {
 	}()
 
 	args := []string{"new-window", "-P", "-F", "#{window_id}", "-t", sessionID + ":"}
+	if strings.TrimSpace(*flagClientTTY) != "" {
+		args = append(args, "-d")
+	}
 	if windowPath != "" {
 		args = append(args, "-c", windowPath)
 	}
@@ -142,10 +145,17 @@ func main() {
 	}
 
 	clientTTY := strings.TrimSpace(*flagClientTTY)
-	if _, err := runTmuxOutput("select-window", "-t", newWindowID); err != nil {
-		debugLog("select-window failed for %s: %v", newWindowID, err)
+	if clientTTY != "" {
+		if _, err := runTmuxOutput("switch-client", "-c", clientTTY, "-t", newWindowID); err != nil {
+			debugLog("switch-client failed for %s via %s: %v", newWindowID, clientTTY, err)
+		}
+		debugLog("switch-client completed")
+	} else {
+		if _, err := runTmuxOutput("select-window", "-t", newWindowID); err != nil {
+			debugLog("select-window failed for %s: %v", newWindowID, err)
+		}
+		debugLog("select-window completed")
 	}
-	debugLog("select-window completed")
 
 	if firstPane != "" {
 		if _, err := runTmuxOutput("select-pane", "-t", firstPane); err != nil {

@@ -6,12 +6,17 @@ source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "$CURRENT_DIR"
 
 NEW_ID="${1:-}"
+CLIENT_TTY="${2:-}"
 if [ -z "$NEW_ID" ]; then
     exit 0
 fi
 
 focus_window() {
-    tmux select-window -t "$NEW_ID" 2>/dev/null || true
+    if [ -n "$CLIENT_TTY" ]; then
+        tmux switch-client -c "$CLIENT_TTY" -t "$NEW_ID" 2>/dev/null || true
+    else
+        tmux select-window -t "$NEW_ID" 2>/dev/null || true
+    fi
 }
 
 is_aux_cmd() {

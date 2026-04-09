@@ -102,9 +102,10 @@ func newTestCoordinator(t *testing.T) *Coordinator {
 		clientWidths:       make(map[string]int),
 		prevPaneBusy:       make(map[string]bool),
 		prevPaneTitle:      make(map[string]string),
+		aiInputActive:      make(map[string]bool),
 		hookPaneActive:     make(map[string]bool),
 		hookPaneBusyIdleAt: make(map[string]int64),
-		aiBellUntil:        make(map[int]int64),
+		aiBellUntil:        make(map[string]int64),
 		pendingMenus:       make(map[string][]menuItemDef),
 		lastWindowSelect:   make(map[string]time.Time),
 		lastWindowByClient: make(map[string]time.Time),
@@ -132,6 +133,7 @@ func TestHelpersSanity(t *testing.T) {
 	assert.NotNil(t, c.cwdColors)
 	assert.NotNil(t, c.clientWidths)
 	assert.NotNil(t, c.prevPaneTitle)
+	assert.NotNil(t, c.aiInputActive)
 	assert.NotNil(t, c.hookPaneActive)
 	assert.NotNil(t, c.hookPaneBusyIdleAt)
 	assert.NotNil(t, c.aiBellUntil)

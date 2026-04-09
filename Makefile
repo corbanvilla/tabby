@@ -13,6 +13,7 @@ TABBY_DAEMON=bin/tabby-daemon
 SIDEBAR_RENDERER=bin/sidebar-renderer
 PANE_HEADER=bin/pane-header
 MANAGE_GROUP=bin/manage-group
+NEW_WINDOW=bin/new-window
 
 # Directories
 BIN_DIR=bin
@@ -24,7 +25,7 @@ SCREENSHOT_DIR=$(TEST_DIR)/screenshots
 all: build
 
 # Build all binaries
-build: $(RENDER_STATUS) $(RENDER_TAB) $(TABBY_DAEMON) $(SIDEBAR_RENDERER) $(PANE_HEADER) $(MANAGE_GROUP)
+build: $(RENDER_STATUS) $(RENDER_TAB) $(TABBY_DAEMON) $(SIDEBAR_RENDERER) $(PANE_HEADER) $(MANAGE_GROUP) $(NEW_WINDOW)
 
 $(RENDER_STATUS): cmd/render-status/main.go pkg/**/*.go
 	@mkdir -p $(BIN_DIR)
@@ -49,6 +50,10 @@ $(PANE_HEADER): cmd/pane-header/main.go pkg/**/*.go
 $(MANAGE_GROUP): cmd/manage-group/main.go pkg/**/*.go
 	@mkdir -p $(BIN_DIR)
 	$(GOBUILD) -o $@ ./cmd/manage-group
+
+$(NEW_WINDOW): cmd/new-window/main.go pkg/**/*.go
+	@mkdir -p $(BIN_DIR)
+	$(GOBUILD) -o $@ ./cmd/new-window
 
 # Download dependencies
 deps:
@@ -84,14 +89,15 @@ test-e2e: build
 
 # Run live tmux integration test (isolated sockets + attached pseudo-clients)
 test-live: build
-	@$(TEST_DIR)/integration/live_tmux_sessions_test.sh
-	@$(TEST_DIR)/integration/live_socket_override_test.sh
-	@$(TEST_DIR)/integration/live_multiclient_same_session_test.sh
-	@$(TEST_DIR)/integration/live_header_singleton_resilience_test.sh
-	@$(TEST_DIR)/integration/live_sidebar_singleton_names_test.sh
-	@$(TEST_DIR)/integration/live_toggle_concurrency_test.sh
-	@$(TEST_DIR)/integration/live_trajectory_matrix_test.sh
-	@$(TEST_DIR)/integration/live_seeded_fuzz_trajectory_test.sh
+	@bash $(TEST_DIR)/integration/live_tmux_sessions_test.sh
+	@bash $(TEST_DIR)/integration/live_socket_override_test.sh
+	@bash $(TEST_DIR)/integration/live_multiclient_same_session_test.sh
+	@bash $(TEST_DIR)/integration/live_header_singleton_resilience_test.sh
+	@bash $(TEST_DIR)/integration/live_pane_bell_mock_app_test.sh
+	@bash $(TEST_DIR)/integration/live_sidebar_singleton_names_test.sh
+	@bash $(TEST_DIR)/integration/live_toggle_concurrency_test.sh
+	@bash $(TEST_DIR)/integration/live_trajectory_matrix_test.sh
+	@bash $(TEST_DIR)/integration/live_seeded_fuzz_trajectory_test.sh
 
 # Capture visual screenshots
 capture-visual: build
@@ -120,6 +126,7 @@ install: build
 	@cp $(SIDEBAR_RENDERER) $(PLUGIN_DIR)/bin/
 	@cp $(PANE_HEADER) $(PLUGIN_DIR)/bin/
 	@cp $(MANAGE_GROUP) $(PLUGIN_DIR)/bin/
+	@cp $(NEW_WINDOW) $(PLUGIN_DIR)/bin/
 	@cp scripts/*.sh $(PLUGIN_DIR)/scripts/
 	@cp tabby.tmux $(PLUGIN_DIR)/
 	@test -f ~/.config/tabby/config.yaml || cp config.yaml ~/.config/tabby/config.yaml
@@ -136,6 +143,7 @@ sync: build
 	@cp $(SIDEBAR_RENDERER) $(PLUGIN_DIR)/bin/
 	@cp $(PANE_HEADER) $(PLUGIN_DIR)/bin/
 	@cp $(MANAGE_GROUP) $(PLUGIN_DIR)/bin/
+	@cp $(NEW_WINDOW) $(PLUGIN_DIR)/bin/
 	@cp scripts/*.sh $(PLUGIN_DIR)/scripts/
 	@cp tabby.tmux $(PLUGIN_DIR)/
 	@test -f ~/.config/tabby/config.yaml || cp config.yaml ~/.config/tabby/config.yaml

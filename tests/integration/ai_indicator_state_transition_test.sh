@@ -13,6 +13,7 @@ cleanup() {
   tmux set-option -w -t ":$WIN_IDX" -u @tabby_busy 2>/dev/null || true
   tmux set-option -w -t ":$WIN_IDX" -u @tabby_input 2>/dev/null || true
   tmux set-option -w -t ":$WIN_IDX" -u @tabby_bell 2>/dev/null || true
+  tmux set-option -p -t "$PANE_ID" -u @tabby_bell 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -47,11 +48,11 @@ if [ -n "$INPUT_CLEARED" ]; then
 fi
 
 TMUX_PANE="$PANE_ID" "$SET_IND" bell 1
-BELL_VAL="$(tmux show-window-options -t ":$WIN_IDX" -v @tabby_bell 2>/dev/null || true)"
+BELL_VAL="$(tmux show-options -p -t "$PANE_ID" -v @tabby_bell 2>/dev/null || true)"
 if [ "$BELL_VAL" != "1" ]; then
-  echo "✗ bell 1 did not set @tabby_bell on window $WIN_IDX"
+  echo "✗ bell 1 did not set @tabby_bell on pane $PANE_ID"
   exit 1
 fi
 
-echo "✓ busy/input/bell transitions apply correctly on current window"
+echo "✓ busy/input/bell transitions apply correctly on current pane/window"
 echo "=== AI indicator state transition test passed ==="

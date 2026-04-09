@@ -13,6 +13,25 @@ DAEMON_SOCK="/tmp/tabby-daemon-${SESSION_ID}.sock"
 DAEMON_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
 DAEMON_EVENTS_LOG="/tmp/tabby-daemon-${SESSION_ID}-events.log"
 
+read_sidebar_mode() {
+    local mode=""
+    mode=$(tmux show-options -gqv @tabby_sidebar 2>/dev/null || echo "")
+    if [ -z "$mode" ]; then
+        mode=$(tmux show-options -qv @tabby_sidebar 2>/dev/null || echo "")
+    fi
+    if [ -z "$mode" ] && [ -f "$SIDEBAR_STATE_FILE" ]; then
+        mode=$(cat "$SIDEBAR_STATE_FILE" 2>/dev/null || echo "")
+    fi
+    printf "%s" "$mode"
+}
+
+write_sidebar_mode() {
+    local mode="$1"
+    echo "$mode" > "$SIDEBAR_STATE_FILE"
+    tmux set-option -u @tabby_sidebar 2>/dev/null || true
+    tmux set-option -gq @tabby_sidebar "$mode" 2>/dev/null || true
+}
+
 # --- Concurrency guard: prevent overlapping toggles (run-shell -b can fire multiple) ---
 TOGGLE_LOCK="/tmp/tabby-toggle-${SESSION_ID}.lock"
 if ! mkdir "$TOGGLE_LOCK" 2>/dev/null; then
@@ -141,11 +160,8 @@ if [ ! -f "$DAEMON_BIN" ] || [ ! -f "$RENDERER_BIN" ]; then
     exit 1
 fi
 
-# Get current state from tmux option (most reliable) or state file
-CURRENT_STATE=$(tmux show-options -qv @tabby_sidebar 2>/dev/null || echo "")
-if [ -z "$CURRENT_STATE" ] && [ -f "$SIDEBAR_STATE_FILE" ]; then
-    CURRENT_STATE=$(cat "$SIDEBAR_STATE_FILE" 2>/dev/null || echo "")
-fi
+# Get current state from the global tmux option (source of truth) or state file.
+CURRENT_STATE=$(read_sidebar_mode)
 
 if [ "$CURRENT_STATE" = "enabled" ]; then
     restart_daemon_if_unresponsive
@@ -157,7 +173,7 @@ if [ "$CURRENT_STATE" = "enabled" ]; then
     DAEMON_PID=$(cat "$DAEMON_PID_FILE" 2>/dev/null || echo "")
     if [ -z "$DAEMON_PID" ] || ! kill -0 "$DAEMON_PID" 2>/dev/null; then
         CURRENT_STATE="disabled"
-        tmux set-option @tabby_sidebar "disabled" 2>/dev/null || true
+        write_sidebar_mode "disabled"
         while IFS= read -r line; do
             [ -z "$line" ] && continue
             pane_id=$(echo "$line" | cut -d'|' -f2)
@@ -168,6 +184,10 @@ fi
 
 if [ "$CURRENT_STATE" = "enabled" ]; then
     # === DISABLE SIDEBARS ===
+
+    # Flip mode first so any concurrent ensure/restore path sees the session as
+    # disabled even if teardown exits early.
+    write_sidebar_mode "disabled"
 
     # Write sentinel so the watchdog knows this is an intentional stop
     echo $$ > "$CLEAN_STOP_SENTINEL"
@@ -230,13 +250,10 @@ if [ "$CURRENT_STATE" = "enabled" ]; then
     # The hook calls ensure_sidebar.sh which would re-enable the sidebar
     tmux set-hook -gu after-select-window 2>/dev/null || true
 
-    echo "disabled" > "$SIDEBAR_STATE_FILE"
-    tmux set-option @tabby_sidebar "disabled"
     tmux set-option -g status on
 else
     # === ENABLE SIDEBARS ===
-    echo "enabled" > "$SIDEBAR_STATE_FILE"
-    tmux set-option @tabby_sidebar "enabled"
+    write_sidebar_mode "enabled"
 
     # Snapshot saved pane layouts before system panes are killed/re-spawned.
     # after-split-window will overwrite @tabby_layout_* when new system panes are
@@ -364,18 +381,21 @@ else
     # Get all windows
     WINDOWS=$(tmux list-windows -F "#{window_id}")
 
-    # Restore focus to the saved window and pane
+    # Restore focus to the saved window and pane only for single-client sessions.
+    # In multi-client sessions, bare select-window/select-pane is session-wide and
+    # can collapse different clients back onto the same window.
     SAVED_WINDOW=$(tmux show-option -gqv @tabby_last_window)
     SAVED_PANE=$(tmux show-option -gqv @tabby_last_pane)
+    CLIENT_COUNT=$(tmux list-clients 2>/dev/null | wc -l | tr -d ' ')
 
-    if [ -n "$SAVED_WINDOW" ]; then
+    if [ "${CLIENT_COUNT:-0}" -le 1 ] && [ -n "$SAVED_WINDOW" ]; then
         tmux select-window -t "$SAVED_WINDOW" 2>/dev/null || true
     fi
 
-    if [ -n "$SAVED_PANE" ]; then
+    if [ "${CLIENT_COUNT:-0}" -le 1 ] && [ -n "$SAVED_PANE" ]; then
         # Try to restore the exact pane
         tmux select-pane -t "$SAVED_PANE" 2>/dev/null || true
-    else
+    elif [ "${CLIENT_COUNT:-0}" -le 1 ]; then
         # Fallback: focus main pane based on sidebar position
         if [ "$SIDEBAR_POSITION" = "left" ]; then
             tmux select-pane -t "{right}" 2>/dev/null || true

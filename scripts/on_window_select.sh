@@ -6,10 +6,21 @@ if [ "$SPAWNING" = "1" ]; then
     exit 0
 fi
 
-# Clear AI tool input/bell indicators when user switches to a window
-# (user is now looking at it, so the notification is acknowledged)
-tmux set-option -w @tabby_input "" 2>/dev/null || true
+# Clear bell indicators when user switches to a window.
+# Input is only acknowledged when the specific pane is focused.
 tmux set-option -w @tabby_bell "" 2>/dev/null || true
+
+# Re-entering a window does not trigger after-select-pane when the same content
+# pane remains active, so acknowledge input-needed on that focused pane here too.
+ACTIVE_CMD=$(tmux display-message -p '#{pane_current_command}' 2>/dev/null || echo "")
+ACTIVE_START=$(tmux display-message -p '#{pane_start_command}' 2>/dev/null || echo "")
+case "$ACTIVE_CMD $ACTIVE_START" in
+    *sidebar-renderer*|*pane-header*)
+        ;;
+    *)
+        tmux set-option -p @tabby_input_ack 1 2>/dev/null || true
+        ;;
+esac
 
 # Signal daemon to refresh immediately (daemon handles width sync)
 DAEMON_PID_FILE="/tmp/tabby-daemon-$(tmux display-message -p '#{session_id}').pid"

@@ -230,6 +230,63 @@ func TestGenerateMainContent_WithPanes(t *testing.T) {
 	assert.NotEmpty(t, content)
 }
 
+func TestGenerateMainContent_RendersPaneBellForExpandedMultiPaneWindow(t *testing.T) {
+	c := newRenderCoordinator(t)
+	c.config.Indicators.Bell.Enabled = true
+	c.config.Indicators.Bell.Icon = "BELL"
+	c.stateMu.Lock()
+	c.windows = []tmux.Window{{
+		ID:     "@1",
+		Index:  0,
+		Name:   "main",
+		Active: true,
+		Panes: []tmux.Pane{
+			{ID: "%1", Command: "bash", LockedTitle: "left-ai", AIBell: true, Width: 80, Height: 12, Top: 0, Left: 0},
+			{ID: "%2", Command: "bash", LockedTitle: "right-ai", Width: 80, Height: 12, Top: 0, Left: 81},
+		},
+	}}
+	c.grouped = []grouping.GroupedWindows{{
+		Name:    "Default",
+		Theme:   config.Theme{Bg: "#2c3e50", Fg: "#ecf0f1"},
+		Windows: c.windows,
+	}}
+	c.windowVisualPos = map[string]int{"@1": 0}
+	c.stateMu.Unlock()
+
+	content, _ := c.generateMainContent("@1", 40, 24)
+	assert.Contains(t, content, "left-ai")
+	assert.Contains(t, content, "right-ai")
+	assert.Contains(t, content, "BELL")
+}
+
+func TestGenerateMainContent_RendersBellForActiveSinglePaneWindow(t *testing.T) {
+	c := newRenderCoordinator(t)
+	c.config.Indicators.Bell.Enabled = true
+	c.config.Indicators.Bell.Icon = "BELL"
+	c.stateMu.Lock()
+	c.windows = []tmux.Window{{
+		ID:     "@1",
+		Index:  0,
+		Name:   "main",
+		Active: true,
+		Bell:   true,
+		Panes: []tmux.Pane{
+			{ID: "%1", Command: "codex", Active: true, AIBell: true, Width: 80, Height: 24, Top: 0, Left: 0},
+		},
+	}}
+	c.grouped = []grouping.GroupedWindows{{
+		Name:    "Default",
+		Theme:   config.Theme{Bg: "#2c3e50", Fg: "#ecf0f1"},
+		Windows: c.windows,
+	}}
+	c.windowVisualPos = map[string]int{"@1": 0}
+	c.stateMu.Unlock()
+
+	content, _ := c.generateMainContent("@1", 40, 24)
+	assert.Contains(t, content, "BELL")
+	assert.Contains(t, content, "main")
+}
+
 func TestRenderClockWidget(t *testing.T) {
 	c := newRenderCoordinator(t)
 	c.config.Widgets.Clock.Enabled = true

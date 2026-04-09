@@ -1816,6 +1816,7 @@ func main() {
 		lastWindowsHash := ""
 		lastGitState := ""
 		activeWindowID := "" // Track active window for optimized rendering
+		animationTickCount := 0
 
 		// Helper to get current active window ID (cached, updated on events)
 		updateActiveWindow := func() {
@@ -2021,12 +2022,21 @@ func main() {
 				// Combined spinner + pet animation tick with timeout protection.
 				// Animation is cosmetic — a stall just skips the frame (non-fatal).
 				runLoopTaskNonFatal("animation_tick", 2*time.Second, func() {
+					animationTickCount++
 					spinnerVisible := coordinator.IncrementSpinner()
 					petChanged := coordinator.UpdatePetState()
 					indicatorAnimated := coordinator.HasActiveIndicatorAnimation()
 					if spinnerVisible || petChanged || indicatorAnimated {
 						perf.Log("animationTick (render)")
-						server.RenderActiveWindowOnly(activeWindowID)
+						if activeWindowID != "" {
+							server.BroadcastRenderToClients([]string{activeWindowID})
+						}
+						// Keep hidden windows reasonably fresh without redrawing the
+						// whole session at 10fps. A coarse full broadcast is enough
+						// to avoid frozen off-screen busy indicators.
+						if spinnerVisible && animationTickCount%5 == 0 {
+							server.BroadcastRender()
+						}
 					}
 				})
 			case <-gitTicker.C:

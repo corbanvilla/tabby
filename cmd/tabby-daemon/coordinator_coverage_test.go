@@ -376,6 +376,19 @@ func TestTreeCPU_UnknownPID(t *testing.T) {
 	assert.Equal(t, 0.0, pt.treeCPU(999))
 }
 
+func TestProcessTreeSubtreeHasAITool(t *testing.T) {
+	tmux.ConfigureBusyDetection(nil, []string{"codex"}, 0)
+	pt := &processTree{
+		children:  map[int][]int{100: {101}, 101: {102}},
+		cpuByPID:  map[int]float64{100: 0, 101: 0, 102: 0},
+		commByPID: map[int]string{100: "fish", 101: "node", 102: "codex"},
+		argsByPID: map[int]string{100: "-fish", 101: "node codex.js", 102: "codex --help"},
+	}
+	assert.True(t, pt.subtreeHasAITool(100))
+	assert.True(t, isAIPane(tmux.Pane{ID: "%1", Command: "fish", PID: 100}, pt))
+	assert.False(t, isAIPane(tmux.Pane{ID: "%2", Command: "fish", PID: 999}, pt))
+}
+
 func TestProcessAIToolStates_EmptyWindows(t *testing.T) {
 	c := newTestCoordinator(t)
 	c.config.Indicators.Busy.Enabled = false
@@ -450,12 +463,30 @@ func TestProcessAIToolStates_PrevBusyTriggersBell(t *testing.T) {
 	pending := c.processAIToolStates(nil)
 	found := false
 	for _, p := range pending {
-		if p.key == "@tabby_bell" && p.value == "1" {
+		if p.key == "@tabby_bell" && p.value == "1" && p.pane && p.windowID == "%1" {
 			found = true
 			break
 		}
 	}
 	assert.True(t, found, "prev busy pane should trigger bell")
+	assert.True(t, c.windows[0].Panes[0].AIBell)
+	assert.True(t, c.windows[0].Bell)
+}
+
+func TestProcessAIToolStates_CollapsedMultiPaneAggregatesBell(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = false
+	c.config.Indicators.Input.Enabled = false
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Collapsed: true, Panes: []tmux.Pane{
+			{ID: "%1", Command: "bash", AIBell: true},
+			{ID: "%2", Command: "bash"},
+		}},
+	}
+
+	pending := c.processAIToolStates(nil)
+	assert.Empty(t, pending)
+	assert.True(t, c.windows[0].Bell)
 }
 
 func TestProcessAIToolStates_WithPreloadedProcessTree(t *testing.T) {
@@ -486,6 +517,132 @@ func TestProcessAIToolStates_MultipleWindows(t *testing.T) {
 	}
 	pending := c.processAIToolStates(nil)
 	assert.GreaterOrEqual(t, len(pending), 2)
+}
+
+func TestProcessAIToolStates_ActiveSinglePaneKeepsInputVisible(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = false
+	c.config.Indicators.Input.Enabled = false
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Active: true, Input: true, Panes: []tmux.Pane{
+			{ID: "%1", Command: "2.1.17", Title: "✳ waiting", Active: true},
+		}},
+	}
+
+	pending := c.processAIToolStates(nil)
+	assert.Empty(t, pending)
+	assert.True(t, c.windows[0].Panes[0].AIInput)
+	assert.True(t, c.windows[0].Input)
+}
+
+func TestProcessAIToolStates_InputAckSuppressesInputUntilBusyAgain(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = false
+	c.config.Indicators.Input.Enabled = false
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Active: true, Input: true, Panes: []tmux.Pane{
+			{ID: "%1", Command: "2.1.17", Title: "✳ waiting", Active: true, InputAck: true},
+		}},
+	}
+
+	pending := c.processAIToolStates(nil)
+	foundUnset := false
+	for _, p := range pending {
+		if p.windowID == "@1" && p.key == "@tabby_input" && p.unset {
+			foundUnset = true
+			break
+		}
+	}
+	assert.True(t, foundUnset, "acknowledged input should clear the window-level hook flag")
+	assert.False(t, c.windows[0].Panes[0].AIInput)
+	assert.False(t, c.windows[0].Input)
+}
+
+func TestProcessAIToolStates_BusyClearsInputAck(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = false
+	c.config.Indicators.Input.Enabled = false
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Busy: true, Panes: []tmux.Pane{
+			{ID: "%1", Command: "2.1.17", Title: "⠋ thinking", Active: true, InputAck: true},
+		}},
+	}
+
+	pending := c.processAIToolStates(nil)
+	foundUnset := false
+	for _, p := range pending {
+		if p.windowID == "%1" && p.pane && p.key == "@tabby_input_ack" && p.unset {
+			foundUnset = true
+			break
+		}
+	}
+	assert.True(t, foundUnset, "busy transition should clear pane input acknowledgment")
+	assert.True(t, c.windows[0].Panes[0].AIBusy)
+	assert.False(t, c.windows[0].Panes[0].InputAck)
+}
+
+func TestProcessAIToolStates_InputPersistsAcrossRefreshesUntilAck(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = false
+	c.config.Indicators.Input.Enabled = false
+	c.aiInputActive["%1"] = true
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Active: false, Panes: []tmux.Pane{
+			{ID: "%1", Command: "2.1.17", Title: "waiting", Active: true},
+		}},
+	}
+
+	pending := c.processAIToolStates(nil)
+	assert.Empty(t, pending)
+	assert.True(t, c.windows[0].Panes[0].AIInput)
+	assert.True(t, c.windows[0].Input)
+}
+
+func TestProcessAIToolStates_PreservesHookInputAfterProcessReturnsToShell(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = false
+	c.config.Indicators.Input.Enabled = false
+	c.prevPaneBusy["%1"] = true
+	c.prevPaneTitle["%1"] = "✳ waiting"
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Input: true, Panes: []tmux.Pane{
+			{ID: "%1", Command: "fish", Active: true},
+		}},
+	}
+
+	pending := c.processAIToolStates(nil)
+	assert.Empty(t, pending)
+	assert.True(t, c.windows[0].Input)
+	assert.False(t, c.windows[0].Bell)
+	assert.False(t, c.windows[0].Panes[0].AIBell)
+}
+
+func TestProcessAIToolStates_AckedShellClearsPreservedInput(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = false
+	c.config.Indicators.Input.Enabled = false
+	c.prevPaneBusy["%1"] = true
+	c.prevPaneTitle["%1"] = "✳ waiting"
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Input: true, Panes: []tmux.Pane{
+			{ID: "%1", Command: "fish", Active: true, InputAck: true},
+		}},
+	}
+
+	pending := c.processAIToolStates(nil)
+	foundInputUnset := false
+	foundAckUnset := false
+	for _, p := range pending {
+		if p.windowID == "@1" && p.key == "@tabby_input" && p.unset {
+			foundInputUnset = true
+		}
+		if p.windowID == "%1" && p.pane && p.key == "@tabby_input_ack" && p.unset {
+			foundAckUnset = true
+		}
+	}
+	assert.True(t, foundInputUnset)
+	assert.True(t, foundAckUnset)
+	assert.False(t, c.windows[0].Input)
 }
 
 func TestUpdatePetState_PetDisabled(t *testing.T) {

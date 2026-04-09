@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/brendandebeasi/tabby/pkg/colors"
 	"github.com/brendandebeasi/tabby/pkg/config"
@@ -53,6 +54,40 @@ func GroupWindowsWithOptions(windows []tmux.Window, groups []config.Group, inclu
 		result = append(result, gw)
 	}
 
+	// Add dynamic prefix-based groups for windows like "Prefix|Name" when no
+	// explicit group assignment or configured regex group exists.
+	dynamicNames := make(map[string]bool)
+	for _, win := range windows {
+		if win.Pinned || win.Group != "" {
+			continue
+		}
+		if inferGroupNameFromPattern(win.Name, groups) != "Default" {
+			continue
+		}
+		if dynamicName, ok := inferDynamicGroupName(win.Name); ok {
+			dynamicNames[dynamicName] = true
+		}
+	}
+
+	dynamicGroupNames := make([]string, 0, len(dynamicNames))
+	for name := range dynamicNames {
+		dynamicGroupNames = append(dynamicGroupNames, name)
+	}
+	sort.Strings(dynamicGroupNames)
+	for _, name := range dynamicGroupNames {
+		if _, exists := groupMap[name]; exists {
+			continue
+		}
+		dyn := config.DefaultGroupWithIndex(name, dynamicGroupPaletteIndex(name))
+		gw := &GroupedWindows{
+			Name:    dyn.Name,
+			Theme:   dyn.Theme,
+			Windows: []tmux.Window{},
+		}
+		groupMap[name] = gw
+		result = append(result, gw)
+	}
+
 	for _, win := range windows {
 		// Pinned windows go to the special Pinned group
 		if win.Pinned {
@@ -66,6 +101,11 @@ func GroupWindowsWithOptions(windows []tmux.Window, groups []config.Group, inclu
 		groupName := win.Group
 		if groupName == "" {
 			groupName = inferGroupNameFromPattern(win.Name, groups)
+			if groupName == "Default" {
+				if dynamicName, ok := inferDynamicGroupName(win.Name); ok {
+					groupName = dynamicName
+				}
+			}
 		}
 
 		// Find the target group
@@ -137,6 +177,29 @@ func inferGroupNameFromPattern(windowName string, groups []config.Group) string 
 		}
 	}
 	return "Default"
+}
+
+func inferDynamicGroupName(windowName string) (string, bool) {
+	prefix, _, ok := strings.Cut(windowName, "|")
+	if !ok {
+		return "", false
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return "", false
+	}
+	return prefix, true
+}
+
+func dynamicGroupPaletteIndex(name string) int {
+	sum := 0
+	for _, r := range name {
+		sum += int(r)
+	}
+	if sum < 0 {
+		sum = -sum
+	}
+	return sum
 }
 
 func FindGroupTheme(groupName string, groups []config.Group) config.Theme {

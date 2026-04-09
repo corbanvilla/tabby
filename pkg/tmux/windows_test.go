@@ -285,6 +285,16 @@ func TestConfigureBusyDetection(t *testing.T) {
 	})
 }
 
+func TestIsAIToolCommandLine(t *testing.T) {
+	restoreState(t)
+	ConfigureBusyDetection(nil, []string{"codex", "claude"}, 0)
+
+	assert.True(t, IsAIToolCommandLine("codex", ""))
+	assert.True(t, IsAIToolCommandLine("node", "/home/me/.local/share/pnpm/.../@openai/codex/bin/codex.js"))
+	assert.True(t, IsAIToolCommandLine("bash", "codex exec"))
+	assert.False(t, IsAIToolCommandLine("node", "node server.js"))
+}
+
 func TestListWindows(t *testing.T) {
 	restoreState(t)
 
@@ -325,7 +335,7 @@ func TestListWindows(t *testing.T) {
 		}
 	})
 
-	t.Run("busy_bell_pinned_icon_color_group_parsed", func(t *testing.T) {
+	t.Run("busy_pinned_icon_color_group_parsed_without_native_bell", func(t *testing.T) {
 		mock := newMock()
 		line := fields("@3", "2", "work", "0", "0", "1", "0", "0",
 			"#ff0000", "dev", "1", "", "", "", "", "", "", "1", "$0", "1", "🔥", "layout")
@@ -336,7 +346,7 @@ func TestListWindows(t *testing.T) {
 		assert.NoError(t, err)
 		if assert.Len(t, windows, 1) {
 			w := windows[0]
-			assert.True(t, w.Bell)
+			assert.False(t, w.Bell)
 			assert.True(t, w.Busy)
 			assert.True(t, w.Pinned)
 			assert.Equal(t, "🔥", w.Icon)
@@ -1237,4 +1247,56 @@ func TestListWindowsWithPanes_FiltersSidebarPanes(t *testing.T) {
 			assert.Equal(t, "bash", windows[0].Panes[0].Command)
 		}
 	})
+}
+
+func TestListWindowsWithPanes_ParsesPaneBell(t *testing.T) {
+	restoreState(t)
+
+	windowOutput := fields("@0", "0", "window0", "0", "0", "0", "0", "0",
+		"", "", "0", "", "", "", "", "", "", "1", "$0", "", "", "")
+	paneOutput := fields(
+		"@0", "0", "%0", "0", "1", "bash", "Shell",
+		"99990", "1700000000", "", "0", "0",
+		"/home", "0", "", "bash", "80", "24", "1",
+	)
+	mock := &mockRunner{
+		responses: map[string]mockResp{
+			"list-windows": {output: []byte(windowOutput), err: nil},
+			"list-panes":   {output: []byte(paneOutput), err: nil},
+		},
+	}
+	DefaultRunner = mock
+	defer restoreState(t)
+
+	windows, err := ListWindowsWithPanes()
+	assert.NoError(t, err)
+	if assert.Len(t, windows, 1) && assert.Len(t, windows[0].Panes, 1) {
+		assert.True(t, windows[0].Panes[0].AIBell)
+	}
+}
+
+func TestListWindowsWithPanes_ParsesPaneInputAck(t *testing.T) {
+	restoreState(t)
+
+	windowOutput := fields("@0", "0", "window0", "0", "0", "0", "0", "0",
+		"", "", "0", "", "", "", "", "", "", "1", "$0", "", "", "")
+	paneOutput := fields(
+		"@0", "0", "%0", "0", "1", "bash", "Shell",
+		"99990", "1700000000", "", "0", "0",
+		"/home", "0", "", "bash", "80", "24", "0", "1",
+	)
+	mock := &mockRunner{
+		responses: map[string]mockResp{
+			"list-windows": {output: []byte(windowOutput), err: nil},
+			"list-panes":   {output: []byte(paneOutput), err: nil},
+		},
+	}
+	DefaultRunner = mock
+	defer restoreState(t)
+
+	windows, err := ListWindowsWithPanes()
+	assert.NoError(t, err)
+	if assert.Len(t, windows, 1) && assert.Len(t, windows[0].Panes, 1) {
+		assert.True(t, windows[0].Panes[0].InputAck)
+	}
 }

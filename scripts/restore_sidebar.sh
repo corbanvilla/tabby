@@ -58,8 +58,13 @@ restart_daemon_if_unresponsive() {
     fi
 }
 
-# Check tmux user option for persistent state (survives detach/reattach)
-MODE=$(tmux show-options -qv @tabby_sidebar 2>/dev/null || echo "")
+# Check tmux global user option for persistent state (survives detach/reattach)
+MODE=$(tmux show-options -gqv @tabby_sidebar 2>/dev/null || echo "")
+
+# Fall back to any older session-local value and then the temp file.
+if [ -z "$MODE" ]; then
+    MODE=$(tmux show-options -qv @tabby_sidebar 2>/dev/null || echo "")
+fi
 
 # Also check temp file as fallback
 if [ -z "$MODE" ] && [ -f "$SIDEBAR_STATE_FILE" ]; then

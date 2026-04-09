@@ -77,7 +77,7 @@ start_attached_client
 tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1
 
-tmx set-option -g @tabby_sidebar enabled
+tmx set-option -g @tabby_sidebar disabled
 tmx set-option -g @tabby_sidebar_position left
 tmx set-option -g @tabby_sidebar_mode full
 tmx set-option -g @tabby_pane_headers off
@@ -88,8 +88,10 @@ tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/ensure_sidebar.sh"
 
 tmx rename-window -t "$SESSION:0" "hello"
 tmx set-window-option -t "$SESSION:0" @tabby_name_locked 1
+tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/signal_sidebar.sh"
 tmx new-window -t "$SESSION:" -n "mywin" "sleep 60"
 tmx set-window-option -t "$SESSION:1" @tabby_name_locked 1
+tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/signal_sidebar.sh"
 tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/ensure_sidebar.sh"
 
 if ! wait_for 40 sidebar_count_ok; then

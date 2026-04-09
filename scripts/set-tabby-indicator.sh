@@ -1,5 +1,5 @@
 #!/bin/bash
-# set-tabby-indicator.sh - Set tabby indicators on a tmux window
+# set-tabby-indicator.sh - Set tabby indicators on a tmux window or pane
 # Usage: set-tabby-indicator.sh [busy|bell|activity|silence] [0|1]
 #
 # For busy=1 (UserPromptSubmit): Uses the currently focused pane since
@@ -17,7 +17,7 @@
 INDICATOR="$1"
 VALUE="$2"
 
-# State directory for tracking which windows were marked busy
+# State directory for tracking which panes/windows were marked busy
 STATE_DIR="/tmp/tabby-state"
 mkdir -p "$STATE_DIR" 2>/dev/null
 
@@ -33,6 +33,18 @@ window_exists() {
     local win="$1"
     [ -n "$win" ] || return 1
     tmux list-windows -F '#{window_index}' 2>/dev/null | grep -qx "$win"
+}
+
+pane_exists() {
+    local pane="$1"
+    [ -n "$pane" ] || return 1
+    tmux display-message -t "$pane" -p '#{pane_id}' >/dev/null 2>&1
+}
+
+resolve_window_from_pane() {
+    local pane="$1"
+    [ -n "$pane" ] || return 1
+    tmux display-message -t "$pane" -p '#{window_index}' 2>/dev/null
 }
 
 resolve_window_from_state() {
@@ -68,14 +80,42 @@ resolve_window_from_state() {
     return 1
 }
 
+resolve_pane_from_state() {
+    local pane=""
+
+    if [ -n "$SESSION" ] && [ -f "$STATE_DIR/last-pane-${SESSION}" ]; then
+        pane=$(cat "$STATE_DIR/last-pane-${SESSION}" 2>/dev/null || true)
+        if pane_exists "$pane"; then
+            echo "$pane"
+            return 0
+        fi
+    fi
+
+    if [ -n "$SESSION" ]; then
+        local newest
+        newest=$(ls -t "$STATE_DIR"/busy-pane-"${SESSION}"-* 2>/dev/null | head -n1 || true)
+        if [ -n "$newest" ]; then
+            pane=${newest##*-}
+            if pane_exists "$pane"; then
+                echo "$pane"
+                return 0
+            fi
+        fi
+    fi
+
+    return 1
+}
+
 # Get the window for this Claude session
 # Strategy: Use TMUX_PANE if valid, otherwise try to find our parent's pane
+CLAUDE_PANE=""
 CLAUDE_WIN=""
 
 # First, verify TMUX_PANE points to an existing pane
 if [ -n "$TMUX_PANE" ]; then
     # Check if this pane still exists
     if tmux display-message -t "$TMUX_PANE" -p '#{pane_id}' &>/dev/null; then
+        CLAUDE_PANE="$TMUX_PANE"
         CLAUDE_WIN=$(tmux display-message -t "$TMUX_PANE" -p '#{window_index}' 2>/dev/null)
     fi
 fi
@@ -86,9 +126,10 @@ if [ -z "$CLAUDE_WIN" ]; then
     CURRENT_PID=$$
     for _ in 1 2 3 4 5 6 7 8 9 10; do
         # Check if this PID is a tmux pane's shell
-        FOUND_PANE=$(tmux list-panes -a -F '#{pane_pid}:#{window_index}' 2>/dev/null | grep "^${CURRENT_PID}:" | cut -d: -f2)
-        if [ -n "$FOUND_PANE" ]; then
-            CLAUDE_WIN="$FOUND_PANE"
+        FOUND_PANE_INFO=$(tmux list-panes -a -F '#{pane_pid}:#{pane_id}:#{window_index}' 2>/dev/null | grep "^${CURRENT_PID}:" | head -n1 || true)
+        if [ -n "$FOUND_PANE_INFO" ]; then
+            CLAUDE_PANE=$(printf '%s\n' "$FOUND_PANE_INFO" | cut -d: -f2)
+            CLAUDE_WIN=$(printf '%s\n' "$FOUND_PANE_INFO" | cut -d: -f3)
             break
         fi
         # Move to parent
@@ -104,23 +145,30 @@ fi
 USED_FALLBACK=""
 if [ -z "$CLAUDE_WIN" ]; then
     if [ "$INDICATOR" = "busy" ] && [ "$VALUE" = "1" ]; then
+        CLAUDE_PANE=$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)
         CLAUDE_WIN=$(tmux display-message -p '#{window_index}' 2>/dev/null)
         USED_FALLBACK="active-window"
     else
         # Try robust state-based recovery for stop/question/done events.
-        CLAUDE_WIN=$(resolve_window_from_state || true)
+        CLAUDE_PANE=$(resolve_pane_from_state || true)
+        if [ -n "$CLAUDE_PANE" ]; then
+            CLAUDE_WIN=$(resolve_window_from_pane "$CLAUDE_PANE" || true)
+            USED_FALLBACK="state-recovery"
+        else
+            CLAUDE_WIN=$(resolve_window_from_state || true)
+        fi
         if [ -n "$CLAUDE_WIN" ]; then
             USED_FALLBACK="state-recovery"
         else
             # Cannot determine correct window — skip rather than target wrong one
-            log_debug "TMUX_PANE=$TMUX_PANE -> CLAUDE_WIN=(none, skipping)"
+            log_debug "TMUX_PANE=$TMUX_PANE -> CLAUDE_PANE/CLAUDE_WIN=(none, skipping)"
             exit 0
         fi
     fi
 fi
 
 # Debug logging
-log_debug "TMUX_PANE=$TMUX_PANE -> CLAUDE_WIN=$CLAUDE_WIN${USED_FALLBACK:+ (fallback: $USED_FALLBACK)}"
+log_debug "TMUX_PANE=$TMUX_PANE -> CLAUDE_PANE=$CLAUDE_PANE CLAUDE_WIN=$CLAUDE_WIN${USED_FALLBACK:+ (fallback: $USED_FALLBACK)}"
 
 case "$INDICATOR" in
     busy)
@@ -128,8 +176,13 @@ case "$INDICATOR" in
             # Mark Claude's window as busy (derived from TMUX_PANE)
             if [ -n "$CLAUDE_WIN" ]; then
                 touch "$STATE_DIR/busy-${SESSION}-${CLAUDE_WIN}"
+                if [ -n "$CLAUDE_PANE" ]; then
+                    touch "$STATE_DIR/busy-pane-${SESSION}-${CLAUDE_PANE}"
+                    [ -n "$SESSION" ] && echo "$CLAUDE_PANE" > "$STATE_DIR/last-pane-${SESSION}"
+                fi
                 [ -n "$SESSION" ] && echo "$CLAUDE_WIN" > "$STATE_DIR/last-${SESSION}"
                 tmux set-option -t ":$CLAUDE_WIN" -w @tabby_busy 1 2>/dev/null
+                [ -n "$CLAUDE_PANE" ] && tmux set-option -p -t "$CLAUDE_PANE" -u @tabby_bell 2>/dev/null
                 tmux set-option -t ":$CLAUDE_WIN" -wu @tabby_bell 2>/dev/null
                 echo "Set busy on window $CLAUDE_WIN" >> /tmp/tabby-indicator-debug.log
             fi
@@ -138,6 +191,8 @@ case "$INDICATOR" in
             if [ -n "$CLAUDE_WIN" ]; then
                 tmux set-option -t ":$CLAUDE_WIN" -wu @tabby_busy 2>/dev/null
                 rm -f "$STATE_DIR/busy-${SESSION}-${CLAUDE_WIN}" 2>/dev/null || true
+                [ -n "$CLAUDE_PANE" ] && rm -f "$STATE_DIR/busy-pane-${SESSION}-${CLAUDE_PANE}" 2>/dev/null || true
+                [ -n "$SESSION" ] && [ -n "$CLAUDE_PANE" ] && echo "$CLAUDE_PANE" > "$STATE_DIR/last-pane-${SESSION}"
                 [ -n "$SESSION" ] && echo "$CLAUDE_WIN" > "$STATE_DIR/last-${SESSION}"
                 echo "Cleared busy on window $CLAUDE_WIN" >> /tmp/tabby-indicator-debug.log
             fi
@@ -145,18 +200,27 @@ case "$INDICATOR" in
         ;;
     bell)
         if [ "$VALUE" = "1" ]; then
-            # Set bell ONLY on this Claude's window and clean up its state file
+            # Set bell on the originating pane and clean up its busy state.
             if [ -n "$CLAUDE_WIN" ]; then
                 STATE_FILE="$STATE_DIR/busy-${SESSION}-${CLAUDE_WIN}"
                 tmux set-option -t ":$CLAUDE_WIN" -wu @tabby_busy 2>/dev/null
-                tmux set-option -t ":$CLAUDE_WIN" -w @tabby_bell 1 2>/dev/null
+                if [ -n "$CLAUDE_PANE" ]; then
+                    tmux set-option -p -t "$CLAUDE_PANE" @tabby_bell 1 2>/dev/null
+                    rm -f "$STATE_DIR/busy-pane-${SESSION}-${CLAUDE_PANE}" 2>/dev/null || true
+                    [ -n "$SESSION" ] && echo "$CLAUDE_PANE" > "$STATE_DIR/last-pane-${SESSION}"
+                else
+                    tmux set-option -t ":$CLAUDE_WIN" -w @tabby_bell 1 2>/dev/null
+                fi
                 rm -f "$STATE_FILE" 2>/dev/null || true
                 [ -n "$SESSION" ] && echo "$CLAUDE_WIN" > "$STATE_DIR/last-${SESSION}"
-                echo "Set bell on window $CLAUDE_WIN" >> /tmp/tabby-indicator-debug.log
+                echo "Set bell on pane ${CLAUDE_PANE:-window:$CLAUDE_WIN}" >> /tmp/tabby-indicator-debug.log
             fi
         else
-            # Clear bell on focused window (user is now interacting with it)
-            if [ -n "$CLAUDE_WIN" ]; then
+            # Clear bell on the specific pane when possible.
+            if [ -n "$CLAUDE_PANE" ]; then
+                tmux set-option -p -t "$CLAUDE_PANE" -u @tabby_bell 2>/dev/null
+                echo "Cleared bell on pane $CLAUDE_PANE" >> /tmp/tabby-indicator-debug.log
+            elif [ -n "$CLAUDE_WIN" ]; then
                 tmux set-option -t ":$CLAUDE_WIN" -wu @tabby_bell 2>/dev/null
                 echo "Cleared bell on window $CLAUDE_WIN (focused)" >> /tmp/tabby-indicator-debug.log
             fi

@@ -425,6 +425,45 @@ func (s *Server) BroadcastRender() {
 	s.renderBatchMu.Unlock()
 }
 
+// BroadcastRenderToClients queues render payloads for the specified clients only.
+// Duplicate client IDs are ignored. Unknown client IDs are tolerated.
+func (s *Server) BroadcastRenderToClients(clientIDs []string) {
+	t := perf.Start("BroadcastRenderToClients")
+	defer t.Stop()
+
+	if len(clientIDs) == 0 {
+		return
+	}
+
+	seen := make(map[string]struct{}, len(clientIDs))
+	unique := make([]string, 0, len(clientIDs))
+	for _, id := range clientIDs {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+
+	if len(unique) == 0 {
+		return
+	}
+
+	if s.DebugLog != nil {
+		s.DebugLog("TARGETED_RENDER clients=%d ids=%v", len(unique), unique)
+	}
+
+	s.renderBatchMu.Lock()
+	for _, id := range unique {
+		s.renderPending[id] = true
+	}
+	s.scheduleRenderFlushLocked()
+	s.renderBatchMu.Unlock()
+}
+
 // RenderActiveWindowOnly sends render only to the active window's sidebar and headers.
 // This is an optimization for animation ticks - hidden windows don't need constant updates.
 // activeWindowID is the tmux window ID like "@1", "@4", etc.

@@ -56,6 +56,29 @@ func TestBroadcastRender_DebugLogCalled(t *testing.T) {
 	assert.Greater(t, logCalls, 0)
 }
 
+func TestBroadcastRenderToClients_OnlyRendersRequestedClients(t *testing.T) {
+	s := newTestServer(t)
+	s.clients["@1"] = &ClientInfo{Width: 80, Height: 24}
+	s.clients["@2"] = &ClientInfo{Width: 80, Height: 24}
+
+	called := make(map[string]bool)
+	var mu sync.Mutex
+	s.OnRenderNeeded = func(clientID string, _, _ int) *RenderPayload {
+		mu.Lock()
+		called[clientID] = true
+		mu.Unlock()
+		return nil
+	}
+
+	s.BroadcastRenderToClients([]string{"@2", "@2", ""})
+	time.Sleep(s.renderBatchDelay + 10*time.Millisecond)
+
+	mu.Lock()
+	assert.False(t, called["@1"])
+	assert.True(t, called["@2"])
+	mu.Unlock()
+}
+
 func TestSendRenderToClient_ClientNotFound(t *testing.T) {
 	s := newTestServer(t)
 	s.SendRenderToClient("ghost")
