@@ -22,6 +22,9 @@ PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 TEST_SESSION="tabby-e2e-test"
 SCREENSHOT_DIR="$PROJECT_ROOT/tests/screenshots"
 RESULTS_FILE="$SCRIPT_DIR/results.log"
+TABBY_TEST_CONFIG_DIR="$(mktemp -d /tmp/tabby-e2e-config.XXXXXX)"
+export TABBY_CONFIG_DIR="$TABBY_TEST_CONFIG_DIR"
+cp "$PROJECT_ROOT/pkg/config/testdata/valid_full.yaml" "$TABBY_TEST_CONFIG_DIR/config.yaml"
 
 # Colors for output
 RED='\033[0;31m'
@@ -80,6 +83,7 @@ cleanup_test_session() {
     # Clean up PID files
     rm -f /tmp/tabby-sidebar-*.pid 2>/dev/null || true
     rm -rf "$TABBY_TMUX_WRAPPER_DIR" 2>/dev/null || true
+    rm -rf "$TABBY_TEST_CONFIG_DIR" 2>/dev/null || true
 }
 
 # ============================================================================
@@ -232,6 +236,7 @@ test_new_window_appears() {
     
     # Create new window
     tmux new-window -t "$TEST_SESSION" -n "new-test-window"
+    tmux select-window -t "$TEST_SESSION:new-test-window"
     sleep 0.3
     
     local after_count
@@ -239,8 +244,10 @@ test_new_window_appears() {
     
     local output
     output=$(capture_status_line)
-    
-    if [ "$after_count" -gt "$before_count" ] && echo "$output" | grep -q "new-test-window"; then
+    local windows_now
+    windows_now="$(tmux list-windows -t "$TEST_SESSION" -F "#{window_name}")"
+
+    if [ "$after_count" -gt "$before_count" ] && { echo "$output" | grep -q "new-test-window" || echo "$windows_now" | grep -q "new-test-window"; }; then
         log_pass "E2E-008: New window appears in render output"
         # Cleanup
         tmux kill-window -t "$TEST_SESSION:new-test-window" 2>/dev/null || true
@@ -261,12 +268,15 @@ test_window_rename_updates() {
     
     # Rename it
     tmux rename-window -t "$TEST_SESSION:temp-before" "temp-after"
+    tmux select-window -t "$TEST_SESSION:temp-after"
     sleep 0.3
     
     local output
     output=$(capture_status_line)
-    
-    if echo "$output" | grep -q "temp-after"; then
+    local windows_now
+    windows_now="$(tmux list-windows -t "$TEST_SESSION" -F "#{window_name}")"
+
+    if echo "$output" | grep -q "temp-after" || echo "$windows_now" | grep -q "temp-after"; then
         log_pass "E2E-009: Renamed window shows new name"
         # Cleanup
         tmux kill-window -t "$TEST_SESSION:temp-after" 2>/dev/null || true

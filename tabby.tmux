@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Tabby plugin entry point
 # Fixes: BUG-003 (hook signal targeting)
+#
+# NOTE: tmux run-shell may execute this script via /bin/sh in some setups,
+# which breaks bash-only syntax used below. Re-exec under bash when needed.
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"
+fi
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
@@ -43,8 +49,9 @@ case "$TABBY_AUTO_START" in
     *) TABBY_AUTO_START=0 ;;
 esac
 
-# Build binaries if not present
-if [ ! -f "$CURRENT_DIR/bin/render-status" ]; then
+# Build binaries if not present (skip in @tabby_test mode to keep hook wiring tests fast/deterministic)
+TABBY_TEST_MODE=$(tmux show-option -gqv "@tabby_test" 2>/dev/null || echo "")
+if [ ! -f "$CURRENT_DIR/bin/render-status" ] && [ "$TABBY_TEST_MODE" != "1" ]; then
     "$CURRENT_DIR/scripts/install.sh" || true
 fi
 
@@ -321,6 +328,7 @@ tmux set-window-option -g window-size "latest"
 
 # Unbind right-click on pane so it passes through to apps with mouse capture
 # (sidebar-renderer / pane-header use BubbleTea mouse mode and handle right-click internally)
+tmux set-option -g mouse on
 tmux unbind-key -T root MouseDown3Pane 2>/dev/null || true
 tmux bind-key -T root MouseDown3Pane send-keys -M -t =
 
@@ -527,7 +535,6 @@ if [[ "$POSITION" == "top" ]] || [[ "$POSITION" == "bottom" ]]; then
     tmux set-window-option -g window-status-separator ""
     
     # Mouse bindings for tabs
-    tmux set-option -g mouse on
     tmux bind-key -T root MouseDown1Status select-window -t =
     tmux bind-key -T root MouseDown2Status run-shell "$CURRENT_DIR/scripts/kill_window.sh #{window_index}"
     tmux bind-key -T root MouseDown3Status command-prompt -I "#W" "rename-window '%%' ; set-window-option @tabby_name_locked 1 ; run-shell '$SIGNAL_SIDEBAR_SCRIPT' ; run-shell '$REFRESH_STATUS_SCRIPT'"

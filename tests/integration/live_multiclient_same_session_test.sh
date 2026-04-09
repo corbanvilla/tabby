@@ -73,6 +73,18 @@ window_has_sidebar() {
   tmx list-panes -t "$target" -F "#{pane_current_command}|#{pane_start_command}" 2>/dev/null | grep -Eq "(sidebar-renderer|sidebar)"
 }
 
+no_duplicate_renderers() {
+  local dup_count
+  dup_count="$(tmx list-windows -a -F "#{window_id}" | while read -r wid; do
+    [ -z "$wid" ] && continue
+    count="$(tmx list-panes -t "$wid" -F "#{pane_current_command}|#{pane_start_command}" | awk -F'|' '$1 ~ /(sidebar-renderer|sidebar)/ || $2 ~ /(sidebar-renderer|sidebar)/ {c++} END {print c+0}')"
+    if [ "$count" -gt 1 ]; then
+      echo "$wid"
+    fi
+  done | wc -l | tr -d ' ')"
+  [ "$dup_count" -eq 0 ]
+}
+
 enable_sidebar_for_session() {
   local session="$1"
   local attempt
@@ -181,14 +193,7 @@ if ! wait_for 40 window_has_sidebar "$after_target"; then
   exit 1
 fi
 
-dup_renderers="$(tmx list-windows -a -F "#{window_id}" | while read -r wid; do
-  [ -z "$wid" ] && continue
-  count="$(tmx list-panes -t "$wid" -F "#{pane_current_command}|#{pane_start_command}" | awk -F'|' '$1 ~ /(sidebar-renderer|sidebar)/ || $2 ~ /(sidebar-renderer|sidebar)/ {c++} END {print c+0}')"
-  if [ "$count" -gt 1 ]; then
-    echo "$wid"
-  fi
-done | wc -l | tr -d ' ')"
-if [ "$dup_renderers" -ne 0 ]; then
+if ! wait_for 120 no_duplicate_renderers; then
   echo "✗ found windows with duplicate sidebar renderers"
   exit 1
 fi

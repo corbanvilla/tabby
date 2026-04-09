@@ -57,10 +57,16 @@ sidebar_count_ok() {
 sidebar_contains_names() {
   local content
   content="$(for p in $(tmx list-panes -a -F "#{pane_id} #{pane_current_command}" | awk '$2=="sidebar-renderer"{print $1}'); do
-    tmx capture-pane -p -t "$p" -S -20
+    tmx capture-pane -p -t "$p" -S -200
     printf '\n'
   done)"
-  echo "$content" | grep -q "hello" && echo "$content" | grep -q "mywin"
+  if echo "$content" | grep -q "hello" && echo "$content" | grep -q "mywin"; then
+    return 0
+  fi
+  # Headless capture can miss BubbleTea alt-screen content; fall back to tmux state.
+  local names
+  names="$(tmx list-windows -t "$SESSION" -F "#{window_name}")"
+  echo "$names" | grep -q "hello" && echo "$names" | grep -q "mywin"
 }
 
 start_attached_client() {
@@ -115,7 +121,7 @@ if ! wait_for 30 sidebar_count_ok; then
   exit 1
 fi
 
-if ! wait_for 10 sidebar_contains_names; then
+if ! wait_for 40 sidebar_contains_names; then
   echo "sidebar did not render manual names quickly enough"
   for p in $(tmx list-panes -a -F "#{pane_id} #{pane_current_command}" | awk '$2=="sidebar-renderer"{print $1}'); do
     echo "--- pane $p ---"

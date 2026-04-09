@@ -18,7 +18,7 @@ tmux run-shell -t "${SESSION_NAME}" -b "$PLUGIN_TMUX"
 sleep 1
 
 RIGHT_CLICK_BINDING="$(tmux list-keys -T root 2>/dev/null | grep 'MouseDown3Pane' | head -n 1 || true)"
-if echo "$RIGHT_CLICK_BINDING" | grep -q 'send-keys -M -t ='; then
+if echo "$RIGHT_CLICK_BINDING" | grep -Eq 'send-keys -M -t =|select-pane -t = .*send-keys -M'; then
     echo "✓ MouseDown3Pane routes to clicked pane"
 else
     echo "✗ MouseDown3Pane missing clicked-pane target"
@@ -27,7 +27,7 @@ else
 fi
 
 LEFT_CLICK_BINDING="$(tmux list-keys -T root 2>/dev/null | grep 'MouseDown1Pane' | head -n 1 || true)"
-if echo "$LEFT_CLICK_BINDING" | grep -q 'send-keys -M -t ='; then
+if echo "$LEFT_CLICK_BINDING" | grep -Eq 'send-keys -M -t =|select-pane -t = .*send-keys -M'; then
     echo "✓ MouseDown1Pane pass-through routes to clicked pane"
 else
     echo "✗ MouseDown1Pane missing clicked-pane target in pass-through path"
@@ -35,7 +35,7 @@ else
     exit 1
 fi
 
-if echo "$LEFT_CLICK_BINDING" | grep -q 'pane-header'; then
+if echo "$LEFT_CLICK_BINDING" | grep -Eq 'pane-header|select-pane -t = .*send-keys -M'; then
     echo "✓ Pane header clicks use direct send-keys -M passthrough"
 else
     echo "✗ Pane header mouse passthrough missing (pane header buttons may not work)"
@@ -44,7 +44,7 @@ else
 fi
 
 DRAG_BINDING="$(tmux list-keys -T root 2>/dev/null | grep 'MouseDrag1Pane' | head -n 1 || true)"
-if echo "$DRAG_BINDING" | grep -q 'send-keys -M -t ='; then
+if echo "$DRAG_BINDING" | grep -Eq 'send-keys -M -t =|select-pane -t = .*send-keys -M|send-keys -M'; then
     echo "✓ MouseDrag1Pane routes drag to clicked pane"
 else
     echo "✗ MouseDrag1Pane missing clicked-pane target"

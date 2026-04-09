@@ -127,6 +127,49 @@ if [ "$MODE" = "enabled" ]; then
             done
             # Clear spawning guard - renderers should spawn soon
             tmux set-option -gu @tabby_spawning
+        else
+            # Daemon already running: nudge immediate refresh to avoid waiting
+            # for periodic fallback polling under heavy window churn.
+            "$CURRENT_DIR/scripts/signal_sidebar.sh" "$SESSION_ID" >/dev/null 2>&1 || true
+        fi
+
+        # Opportunistic local fallback:
+        # Only use direct local spawn when daemon is not yet running. When daemon
+        # is alive, prefer daemon-only spawning to avoid duplicate renderer races.
+        if [ "$DAEMON_RUNNING" = "false" ]; then
+            HAS_SIDEBAR=$(tmux list-panes -t "${WINDOW_ID:-}" -F "#{pane_current_command}|#{pane_start_command}" 2>/dev/null | grep -qE "(sidebar-renderer|sidebar)" && echo "yes" || echo "no")
+            if [ "$HAS_SIDEBAR" = "no" ]; then
+                for _ in 1 2 3 4 5; do
+                    sleep 0.1
+                    HAS_SIDEBAR=$(tmux list-panes -t "${WINDOW_ID:-}" -F "#{pane_current_command}|#{pane_start_command}" 2>/dev/null | grep -qE "(sidebar-renderer|sidebar)" && echo "yes" || echo "no")
+                    [ "$HAS_SIDEBAR" = "yes" ] && break
+                done
+            fi
+
+            if [ "$HAS_SIDEBAR" = "no" ]; then
+                RENDERER_BIN="$CURRENT_DIR/bin/sidebar-renderer"
+                if [ -x "$RENDERER_BIN" ] && [ -n "$WINDOW_ID" ] && [ -n "$SESSION_ID" ]; then
+                    # Serialize per-window fallback spawns to avoid duplicate renderers.
+                    LOCK_KEY="tabby-spawn-${SESSION_ID}-${WINDOW_ID}"
+                    tmux wait-for -L "$LOCK_KEY" 2>/dev/null || true
+
+                    # Re-check after lock acquisition.
+                    HAS_SIDEBAR=$(tmux list-panes -t "${WINDOW_ID:-}" -F "#{pane_current_command}|#{pane_start_command}" 2>/dev/null | grep -qE "(sidebar-renderer|sidebar)" && echo "yes" || echo "no")
+                    if [ "$HAS_SIDEBAR" = "no" ]; then
+                        CONTENT_PANE=$(tmux list-panes -t "$WINDOW_ID" -F "#{pane_id}|#{pane_current_command}|#{pane_start_command}" 2>/dev/null | \
+                            awk -F'|' '$2 !~ /(sidebar-renderer|sidebar|tabby-daemon|pane-header)/ && $3 !~ /(sidebar-renderer|sidebar|tabby-daemon|pane-header)/ {print $1; exit}')
+                        if [ -n "$CONTENT_PANE" ]; then
+                            NEW_PANE=$(tmux split-window -d -t "$CONTENT_PANE" -h -b -f -l "$SIDEBAR_WIDTH" -P -F "#{pane_id}" \
+                                "printf '\\033[?25l\\033[2J\\033[H' && exec '$RENDERER_BIN' -session '$SESSION_ID' -window '$WINDOW_ID'" 2>/dev/null || true)
+                            if [ -n "$NEW_PANE" ]; then
+                                tmux set-option -p -t "$NEW_PANE" pane-border-status off >/dev/null 2>&1 || true
+                                "$CURRENT_DIR/scripts/signal_sidebar.sh" "$SESSION_ID" >/dev/null 2>&1 || true
+                            fi
+                        fi
+                    fi
+                    tmux wait-for -U "$LOCK_KEY" >/dev/null 2>&1 || true
+                fi
+            fi
         fi
     fi
 fi
