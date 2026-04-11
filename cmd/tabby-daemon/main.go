@@ -333,6 +333,68 @@ func responsiveSidebarWidth(windowID string, globalWidth int) int {
 	return tmux.ResponsiveSidebarWidth(windowID, globalWidth)
 }
 
+type windowSystemPaneSnapshot struct {
+	liveSystemPanes []string
+	deadSystemPanes []string
+}
+
+func parseSystemPaneSnapshot(raw string) map[string]windowSystemPaneSnapshot {
+	result := make(map[string]windowSystemPaneSnapshot)
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return result
+	}
+
+	for _, rawLine := range strings.Split(trimmed, "\n") {
+		if rawLine == "" {
+			continue
+		}
+		parts := splitTmuxFields(rawLine, 5)
+		if len(parts) < 5 {
+			continue
+		}
+		windowID := parts[0]
+		paneID := parts[1]
+		dead := parts[2] == "1"
+		curCmd := parts[3]
+		startCmd := parts[4]
+		if windowID == "" || paneID == "" {
+			continue
+		}
+		isSystem := strings.Contains(curCmd, "sidebar") || strings.Contains(curCmd, "renderer") ||
+			strings.Contains(startCmd, "sidebar") || strings.Contains(startCmd, "renderer")
+		if !isSystem {
+			continue
+		}
+
+		snap := result[windowID]
+		if dead {
+			snap.deadSystemPanes = append(snap.deadSystemPanes, paneID)
+		} else {
+			snap.liveSystemPanes = append(snap.liveSystemPanes, paneID)
+		}
+		result[windowID] = snap
+	}
+
+	return result
+}
+
+func fetchSystemPaneSnapshotByWindow(sessionID string) map[string]windowSystemPaneSnapshot {
+	if sessionID == "" {
+		return map[string]windowSystemPaneSnapshot{}
+	}
+
+	out, err := exec.Command(
+		"tmux", "list-panes", "-s", "-t", sessionID, "-F",
+		"#{window_id}\x1f#{pane_id}\x1f#{pane_dead}\x1f#{pane_current_command}\x1f#{pane_start_command}",
+	).Output()
+	if err != nil {
+		return map[string]windowSystemPaneSnapshot{}
+	}
+
+	return parseSystemPaneSnapshot(string(out))
+}
+
 // spawnRenderersForNewWindows checks for windows without renderers and spawns them.
 // Returns true if any renderer was spawned (caller should restore focus afterward).
 // The coordinator is used to compute the bounded sidebar width, ensuring the spawn
@@ -355,18 +417,14 @@ func spawnRenderersForNewWindows(server *daemon.Server, sessionID string, window
 	// preventing resize churn on startup.
 	globalWidth := coordinator.GetGlobalWidth()
 
-	// Get the currently active window so we only select-pane in it
-	// We can't easily cache this as it changes frequently, but one query is better than N
-	activeWindowOut, _ := exec.Command("tmux", "display-message", "-p", "#{window_id}").Output()
-	activeWindow := strings.TrimSpace(string(activeWindowOut))
-
 	// Get connected clients (each identified by their window ID)
 	connectedClients := make(map[string]bool)
 	for _, clientID := range server.GetAllClientIDs() {
 		connectedClients[clientID] = true
 	}
 
-	debugLog.Printf("spawnRenderers: active=%s clients=%v", activeWindow, connectedClients)
+	debugLog.Printf("spawnRenderers: clients=%v", connectedClients)
+	systemPaneSnapshot := fetchSystemPaneSnapshotByWindow(sessionID)
 
 	// Check each window
 	for _, win := range windows {
@@ -381,37 +439,17 @@ func spawnRenderersForNewWindows(server *daemon.Server, sessionID string, window
 			continue
 		}
 
-		// Live check: query tmux directly for ANY sidebar/renderer pane in this window.
-		// The cached win.Panes has sidebar panes filtered out by ListWindowsWithPanes,
-		// so we must ask tmux directly. This also catches renderers from other daemons.
-		// Dead system panes (from a crashed daemon) are killed here so focus can escape them.
+		// Build pane state from one session-wide snapshot instead of issuing one
+		// list-panes call per window on each spawn/refresh cycle.
+		snap, hasSnap := systemPaneSnapshot[windowID]
 		systemPanes := make([]string, 0, 2)
-		if rawOut, err := exec.Command("tmux", "list-panes", "-t", windowID, "-F",
-			"#{pane_id}\x1f#{pane_dead}\x1f#{pane_current_command}\x1f#{pane_start_command}").Output(); err == nil {
-			for _, rawLine := range strings.Split(strings.TrimSpace(string(rawOut)), "\n") {
-				if rawLine == "" {
-					continue
-				}
-				rawParts := splitTmuxFields(rawLine, 4)
-				if len(rawParts) < 4 {
-					continue
-				}
-				paneID := rawParts[0]
-				dead := rawParts[1] == "1"
-				curCmd := rawParts[2]
-				startCmd := rawParts[3]
-				isSystem := strings.Contains(curCmd, "sidebar") || strings.Contains(curCmd, "renderer") ||
-					strings.Contains(startCmd, "sidebar") || strings.Contains(startCmd, "renderer")
-				if dead && isSystem {
-					// Kill dead system panes so tmux moves focus to the content pane
-					logEvent("CLEANUP_DEAD_SYSTEM_PANE window=%s pane=%s cmd=%s", windowID, paneID, curCmd)
-					exec.Command("tmux", "kill-pane", "-t", paneID).Run()
-					continue
-				}
-				if !dead && isSystem {
-					systemPanes = append(systemPanes, paneID)
-				}
+		if hasSnap {
+			for _, paneID := range snap.deadSystemPanes {
+				// Kill dead system panes so tmux moves focus to the content pane.
+				logEvent("CLEANUP_DEAD_SYSTEM_PANE window=%s pane=%s", windowID, paneID)
+				exec.Command("tmux", "kill-pane", "-t", paneID).Run()
 			}
+			systemPanes = append(systemPanes, snap.liveSystemPanes...)
 		}
 
 		// Hard singleton guard: never allow more than one live sidebar renderer

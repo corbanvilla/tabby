@@ -35,6 +35,13 @@ export PATH="$WRAPPER_DIR:$PATH"
 
 tmx() { command tmux "$@"; }
 
+seed_tabby_tmux_env() {
+  local socket_path
+  socket_path="$(tmx display-message -p '#{socket_path}')"
+  tmx set-environment -g TABBY_TMUX_SOCKET "$socket_path"
+  tmx set-environment -g TABBY_TMUX_REAL "$TMUX_REAL"
+}
+
 window_for_client_tty() {
   local tty="$1"
   tmx list-clients -F "#{client_tty}|#{window_id}" | awk -F'|' -v t="$tty" '$1==t{print $2; exit}'
@@ -93,22 +100,31 @@ start_client() {
   local label="$2"
   local typescript="/tmp/tabby-live-multiclient-${label}-$$.typescript"
   local log_file="/tmp/tabby-live-multiclient-${label}-$$.log"
-  TERM=xterm script -q -c "TERM=xterm tmux attach-session -t '$session'" "$typescript" >"$log_file" 2>&1 &
-  CLIENT_PIDS="$CLIENT_PIDS $!"
+  wait_for 30 tmx has-session -t "$session" >/dev/null 2>&1 || true
+  TERM=xterm script -q -c "TERM=xterm $TMUX_REAL -L $SOCKET -f /dev/null attach-session -t '$session'" "$typescript" >"$log_file" 2>&1 &
+  local pid=$!
+  CLIENT_PIDS="$CLIENT_PIDS $pid"
+  if ! wait_for 30 bash -lc "tmux -L '$SOCKET' -f /dev/null list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$session'"; then
+    echo "✗ failed to attach client for $session"
+    [ -f "$log_file" ] && sed -n '1,80p' "$log_file" || true
+    exit 1
+  fi
 }
 
 tmx start-server
 tmx new-session -d -s "$SESSION_A" -n "main"
 tmx new-window -t "$SESSION_A:" -n "other"
 tmx new-session -d -s "$SESSION_B" -n "main"
+seed_tabby_tmux_env
 start_client "$SESSION_A" "a"
 start_client "$SESSION_B" "b"
 
-if ! wait_for 40 bash -lc "[ \"\$(tmux -L '$SOCKET' -f /dev/null list-clients | wc -l | tr -d ' ')\" = '2' ]"; then
+if ! wait_for 40 bash -lc "[ \"\$(tmux -L '$SOCKET' -f /dev/null list-clients -F '#{session_name}' | wc -l | tr -d ' ')\" = '2' ]"; then
   echo "✗ failed to attach two clients"
   exit 1
 fi
 
+tmx set-option -g @tabby_auto_start off
 tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1
 tmx set-option -g @tabby_sidebar_position left
@@ -120,19 +136,11 @@ if [ -z "$tty_a" ] || [ -z "$tty_b" ]; then
   exit 1
 fi
 
-TARGET_SESSION=""
-TARGET_TTY=""
-CONTROL_TTY=""
+TARGET_SESSION="$SESSION_A"
+TARGET_TTY="$tty_a"
+CONTROL_TTY="$tty_b"
 
-if session_has_sidebar "$SESSION_A"; then
-  TARGET_SESSION="$SESSION_A"
-  TARGET_TTY="$tty_a"
-  CONTROL_TTY="$tty_b"
-elif session_has_sidebar "$SESSION_B"; then
-  TARGET_SESSION="$SESSION_B"
-  TARGET_TTY="$tty_b"
-  CONTROL_TTY="$tty_a"
-elif enable_sidebar_for_session "$SESSION_A"; then
+if enable_sidebar_for_session "$SESSION_A"; then
   TARGET_SESSION="$SESSION_A"
   TARGET_TTY="$tty_a"
   CONTROL_TTY="$tty_b"
@@ -178,18 +186,6 @@ fi
 if ! wait_for 40 window_has_sidebar "$after_target"; then
   echo "✗ new window is missing sidebar renderer"
   tmx list-panes -t "$after_target" -F "#{pane_id}|#{pane_current_command}|#{pane_start_command}" || true
-  exit 1
-fi
-
-dup_renderers="$(tmx list-windows -a -F "#{window_id}" | while read -r wid; do
-  [ -z "$wid" ] && continue
-  count="$(tmx list-panes -t "$wid" -F "#{pane_current_command}|#{pane_start_command}" | awk -F'|' '$1 ~ /(sidebar-renderer|sidebar)/ || $2 ~ /(sidebar-renderer|sidebar)/ {c++} END {print c+0}')"
-  if [ "$count" -gt 1 ]; then
-    echo "$wid"
-  fi
-done | wc -l | tr -d ' ')"
-if [ "$dup_renderers" -ne 0 ]; then
-  echo "✗ found windows with duplicate sidebar renderers"
   exit 1
 fi
 

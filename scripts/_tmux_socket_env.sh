@@ -41,11 +41,14 @@ tabby_init_tmux_socket_env() {
         esac
     fi
 
-    if [ -z "${TABBY_TMUX_SOCKET:-}" ]; then
-        local socket_path
-        socket_path="$(tmux display-message -p '#{socket_path}' 2>/dev/null || true)"
-        if [ -n "$socket_path" ]; then
-            export TABBY_TMUX_SOCKET="$socket_path"
-        fi
+    local socket_path
+    socket_path="$(tmux display-message -p '#{socket_path}' 2>/dev/null || true)"
+    if [ -n "$socket_path" ]; then
+        # When running inside tmux, the active server's socket path is the source
+        # of truth. This avoids inheriting a stale TABBY_TMUX_SOCKET from an outer
+        # shell when tests or nested tmux servers use a different socket.
+        export TABBY_TMUX_SOCKET="$socket_path"
+    elif [ -n "${TABBY_TMUX_SOCKET:-}" ]; then
+        export TABBY_TMUX_SOCKET
     fi
 }

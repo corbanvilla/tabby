@@ -753,6 +753,14 @@ if [ -n "$SWAP_PANE_BINDING" ] && [ -x "$CYCLE_PANE_BIN" ]; then
     SWAP_KEY=$(normalize_global_key "$SWAP_PANE_BINDING")
     [ -n "$SWAP_KEY" ] && tmux bind-key -n "$SWAP_KEY" run-shell "$CYCLE_PANE_BIN"
 fi
+
+SWAP_WINDOW_SCRIPT="$CURRENT_DIR/scripts/swap_window.sh"
+chmod +x "$SWAP_WINDOW_SCRIPT"
+SWAP_WINDOW_NEXT_BINDING=$(grep "swap_window_next:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/\"//g' || echo "")
+SWAP_WINDOW_PREV_BINDING=$(grep "swap_window_prev:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/\"//g' || echo "")
+bind_from_config "$SWAP_WINDOW_NEXT_BINDING" "run-shell '$SWAP_WINDOW_SCRIPT :+1 #{window_id} #{session_id}'"
+bind_from_config "$SWAP_WINDOW_PREV_BINDING" "run-shell '$SWAP_WINDOW_SCRIPT :-1 #{window_id} #{session_id}'"
+
 # Also override prefix+o to use the smart cycle binary
 if [ -x "$CYCLE_PANE_BIN" ]; then
     tmux bind-key o run-shell "$CYCLE_PANE_BIN"

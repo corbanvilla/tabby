@@ -200,6 +200,7 @@ type Coordinator struct {
 	// Shared state
 	windows         []tmux.Window
 	grouped         []grouping.GroupedWindows
+	groupOrder      []string
 	windowVisualPos map[string]int // window ID -> visual position in sidebar
 	config          *config.Config
 	collapsedGroups map[string]bool
@@ -1431,10 +1432,14 @@ func (c *Coordinator) RefreshWindows() {
 	}
 
 	prefixModeRaw := ""
+	groupOrderRaw := ""
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		if out, err := exec.CommandContext(ctx, "tmux", "show-option", "-gqv", "@tabby_prefix_mode").Output(); err == nil {
 			prefixModeRaw = strings.TrimSpace(string(out))
+		}
+		if out, err := exec.CommandContext(ctx, "tmux", "show-option", "-gqv", "@tabby_group_order").Output(); err == nil {
+			groupOrderRaw = strings.TrimSpace(string(out))
 		}
 		cancel()
 	}
@@ -1449,6 +1454,7 @@ func (c *Coordinator) RefreshWindows() {
 	// We don't reload here to avoid race conditions with toggle_group action
 
 	c.windows = windows
+	c.groupOrder = parseGroupOrderOption(groupOrderRaw)
 
 	activeWindowID := tmuxOutputTrimmed("display-message", "-p", "#{window_id}")
 
@@ -1460,7 +1466,7 @@ func (c *Coordinator) RefreshWindows() {
 	// Collects pending tmux set-option ops for execution after unlock.
 	aiToolOps := c.processAIToolStates(preloadedProcessTree)
 
-	c.grouped = grouping.GroupWindowsWithOptions(windows, c.config.Groups, c.config.Sidebar.ShowEmptyGroups)
+	c.grouped = grouping.GroupWindowsWithOptionsAndOrder(windows, c.config.Groups, c.config.Sidebar.ShowEmptyGroups, c.groupOrder)
 	c.computeVisualPositions()
 	pendingMoves := c.syncWindowIndices()
 
@@ -1517,8 +1523,61 @@ func (c *Coordinator) SetActiveWindowOptimistic(windowID string) {
 		c.windows[i].Active = (c.windows[i].ID == windowID)
 	}
 	// Re-group so generateSidebarHeader picks up the new active window's colors
-	c.grouped = grouping.GroupWindowsWithOptions(c.windows, c.config.Groups, c.config.Sidebar.ShowEmptyGroups)
+	c.grouped = grouping.GroupWindowsWithOptionsAndOrder(c.windows, c.config.Groups, c.config.Sidebar.ShowEmptyGroups, c.groupOrder)
 	c.computeVisualPositions()
+}
+
+func parseGroupOrderOption(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "|")
+	names := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
+}
+
+func serializeGroupOrder(names []string) string {
+	parts := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || name == "Pinned" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		parts = append(parts, name)
+	}
+	return strings.Join(parts, "|")
+}
+
+func swapNamedGroups(names []string, leftName string, rightName string) []string {
+	swapped := append([]string(nil), names...)
+	leftIdx, rightIdx := -1, -1
+	for i, name := range swapped {
+		switch name {
+		case leftName:
+			leftIdx = i
+		case rightName:
+			rightIdx = i
+		}
+	}
+	if leftIdx < 0 || rightIdx < 0 {
+		return swapped
+	}
+	swapped[leftIdx], swapped[rightIdx] = swapped[rightIdx], swapped[leftIdx]
+	return swapped
 }
 
 // tmuxSetOption is a pending tmux set-option command collected under lock
@@ -9991,7 +10050,7 @@ func (c *Coordinator) setGroupMarkerExact(groupName, marker string) bool {
 
 	c.stateMu.Lock()
 	c.config = cfg
-	c.grouped = grouping.GroupWindowsWithOptions(c.windows, c.config.Groups, c.config.Sidebar.ShowEmptyGroups)
+	c.grouped = grouping.GroupWindowsWithOptionsAndOrder(c.windows, c.config.Groups, c.config.Sidebar.ShowEmptyGroups, c.groupOrder)
 	c.stateMu.Unlock()
 	return true
 }
@@ -10084,6 +10143,16 @@ func (c *Coordinator) showWindowContextMenu(clientID string, windowTarget string
 	if win.Group != "" {
 		removeCmd := fmt.Sprintf("set-window-option -t :%d -u @tabby_group", win.Index)
 		args = append(args, "  Remove from Group", "0", removeCmd)
+	}
+
+	// Position submenu
+	swapWindowScript := c.getScriptPath("swap_window.sh")
+	if swapWindowScript != "" {
+		args = append(args, "-Position", "", "")
+		moveUpCmd := fmt.Sprintf("run-shell '%s :-1 %s %s'", swapWindowScript, win.ID, c.sessionID)
+		moveDownCmd := fmt.Sprintf("run-shell '%s :+1 %s %s'", swapWindowScript, win.ID, c.sessionID)
+		args = append(args, "  Move Up", "K", moveUpCmd)
+		args = append(args, "  Move Down", "J", moveDownCmd)
 	}
 
 	// Set Color submenu
@@ -10498,6 +10567,45 @@ func (c *Coordinator) showGroupContextMenu(clientID string, groupName string, po
 		} else {
 			collapseCmd := fmt.Sprintf("run-shell '%s \"%s\" collapse'", toggleGroupScript, group.Name)
 			args = append(args, "Collapse Group", "c", collapseCmd)
+		}
+	}
+
+	if group.Name != "Pinned" {
+		movableNames := make([]string, 0, len(c.grouped))
+		for _, grouped := range c.grouped {
+			if grouped.Name == "Pinned" {
+				continue
+			}
+			movableNames = append(movableNames, grouped.Name)
+		}
+		groupIdx := -1
+		for i, name := range movableNames {
+			if name == group.Name {
+				groupIdx = i
+				break
+			}
+		}
+		if groupIdx >= 0 {
+			signalSidebarScript := c.getScriptPath("signal_sidebar.sh")
+			args = append(args, "-Position", "", "")
+			if groupIdx > 0 {
+				swapped := serializeGroupOrder(swapNamedGroups(movableNames, movableNames[groupIdx-1], group.Name))
+				orderEsc := strings.ReplaceAll(swapped, "'", "'\"'\"'")
+				moveUpCmd := fmt.Sprintf("set-option -gq @tabby_group_order '%s'", orderEsc)
+				if signalSidebarScript != "" {
+					moveUpCmd += fmt.Sprintf(" ; run-shell '%s %s'", signalSidebarScript, c.sessionID)
+				}
+				args = append(args, "  Move Up", "K", moveUpCmd)
+			}
+			if groupIdx >= 0 && groupIdx < len(movableNames)-1 {
+				swapped := serializeGroupOrder(swapNamedGroups(movableNames, group.Name, movableNames[groupIdx+1]))
+				orderEsc := strings.ReplaceAll(swapped, "'", "'\"'\"'")
+				moveDownCmd := fmt.Sprintf("set-option -gq @tabby_group_order '%s'", orderEsc)
+				if signalSidebarScript != "" {
+					moveDownCmd += fmt.Sprintf(" ; run-shell '%s %s'", signalSidebarScript, c.sessionID)
+				}
+				args = append(args, "  Move Down", "J", moveDownCmd)
+			}
 		}
 	}
 
@@ -10928,7 +11036,7 @@ func (c *Coordinator) handleKeyInput(clientID string, input *daemon.InputPayload
 			activeWindowID := tmuxOutputTrimmed("display-message", "-p", "#{window_id}")
 			c.stateMu.Lock()
 			c.config = cfg
-			c.grouped = grouping.GroupWindowsWithOptions(c.windows, c.config.Groups, c.config.Sidebar.ShowEmptyGroups)
+			c.grouped = grouping.GroupWindowsWithOptionsAndOrder(c.windows, c.config.Groups, c.config.Sidebar.ShowEmptyGroups, c.groupOrder)
 			c.computeVisualPositions()
 			moves := c.syncWindowIndices()
 			c.stateMu.Unlock()

@@ -28,6 +28,12 @@ func GroupWindows(windows []tmux.Window, groups []config.Group) []GroupedWindows
 // GroupWindowsWithOptions is like GroupWindows but allows including empty groups.
 // Pinned windows are placed in a special "Pinned" group at the very top.
 func GroupWindowsWithOptions(windows []tmux.Window, groups []config.Group, includeEmpty bool) []GroupedWindows {
+	return GroupWindowsWithOptionsAndOrder(windows, groups, includeEmpty, nil)
+}
+
+// GroupWindowsWithOptionsAndOrder is like GroupWindowsWithOptions but also
+// accepts a preferred runtime group order for non-pinned groups.
+func GroupWindowsWithOptionsAndOrder(windows []tmux.Window, groups []config.Group, includeEmpty bool, orderedNames []string) []GroupedWindows {
 	var result []*GroupedWindows
 	groupMap := make(map[string]*GroupedWindows)
 
@@ -124,9 +130,8 @@ func GroupWindowsWithOptions(windows []tmux.Window, groups []config.Group, inclu
 		return pinnedGroup.Windows[i].Index < pinnedGroup.Windows[j].Index
 	})
 
-	// Collect groups: Default first, then others alphabetically
-	var defaultGroup *GroupedWindows
-	var otherGroups []GroupedWindows
+	// Collect groups: pinned stays special, other groups are ordered below.
+	var nonPinnedGroups []GroupedWindows
 
 	for _, group := range result {
 		// Sort windows by index within each group
@@ -136,29 +141,63 @@ func GroupWindowsWithOptions(windows []tmux.Window, groups []config.Group, inclu
 
 		// Include group if it has windows OR if includeEmpty is true
 		if len(group.Windows) > 0 || includeEmpty {
-			if group.Name == "Default" {
-				g := *group
-				defaultGroup = &g
-			} else {
-				otherGroups = append(otherGroups, *group)
-			}
+			nonPinnedGroups = append(nonPinnedGroups, *group)
 		}
 	}
 
-	// Sort other groups alphabetically by name
-	sort.Slice(otherGroups, func(i, j int) bool {
-		return otherGroups[i].Name < otherGroups[j].Name
-	})
+	if len(orderedNames) > 0 {
+		orderIndex := make(map[string]int, len(orderedNames))
+		for i, name := range orderedNames {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if _, exists := orderIndex[name]; !exists {
+				orderIndex[name] = i
+			}
+		}
+		sort.SliceStable(nonPinnedGroups, func(i, j int) bool {
+			leftIdx, leftOrdered := orderIndex[nonPinnedGroups[i].Name]
+			rightIdx, rightOrdered := orderIndex[nonPinnedGroups[j].Name]
+			switch {
+			case leftOrdered && rightOrdered:
+				return leftIdx < rightIdx
+			case leftOrdered:
+				return true
+			case rightOrdered:
+				return false
+			default:
+				return nonPinnedGroups[i].Name < nonPinnedGroups[j].Name
+			}
+		})
+	} else {
+		// Legacy behavior: Default first, then other groups alphabetically.
+		var defaultGroup *GroupedWindows
+		var otherGroups []GroupedWindows
+		for i := range nonPinnedGroups {
+			if nonPinnedGroups[i].Name == "Default" {
+				g := nonPinnedGroups[i]
+				defaultGroup = &g
+				continue
+			}
+			otherGroups = append(otherGroups, nonPinnedGroups[i])
+		}
+		sort.Slice(otherGroups, func(i, j int) bool {
+			return otherGroups[i].Name < otherGroups[j].Name
+		})
+		nonPinnedGroups = nonPinnedGroups[:0]
+		if defaultGroup != nil {
+			nonPinnedGroups = append(nonPinnedGroups, *defaultGroup)
+		}
+		nonPinnedGroups = append(nonPinnedGroups, otherGroups...)
+	}
 
-	// Build final list: Pinned first (if has windows), then Default, then alphabetical
+	// Build final list: Pinned first (if has windows), then ordered non-pinned groups.
 	var grouped []GroupedWindows
 	if len(pinnedGroup.Windows) > 0 {
 		grouped = append(grouped, *pinnedGroup)
 	}
-	if defaultGroup != nil {
-		grouped = append(grouped, *defaultGroup)
-	}
-	grouped = append(grouped, otherGroups...)
+	grouped = append(grouped, nonPinnedGroups...)
 
 	return grouped
 }

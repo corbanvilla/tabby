@@ -36,6 +36,13 @@ export PATH="$WRAPPER_DIR:$PATH"
 
 tmx() { command tmux "$@"; }
 
+seed_tabby_tmux_env() {
+  local socket_path
+  socket_path="$(tmx display-message -p '#{socket_path}')"
+  tmx set-environment -g TABBY_TMUX_SOCKET "$socket_path"
+  tmx set-environment -g TABBY_TMUX_REAL "$TMUX_REAL"
+}
+
 cleanup() {
   [ -n "$CLIENT_PID" ] && kill "$CLIENT_PID" >/dev/null 2>&1 || true
   tmx kill-server >/dev/null 2>&1 || true
@@ -223,10 +230,12 @@ tmx start-server
 tmx new-session -d -s "$SESSION" -n "main"
 export TABBY_TMUX_SOCKET
 TABBY_TMUX_SOCKET="$(tmx display-message -p '#{socket_path}')"
-TERM=xterm script -q -c "TERM=xterm tmux attach-session -t '$SESSION'" "/tmp/tabby-live-fuzz-attach-$$.typescript" >/tmp/tabby-live-fuzz-attach-$$.log 2>&1 &
+wait_for 20 tmx has-session -t "$SESSION"
+TERM=xterm script -q -c "TERM=xterm '$TMUX_REAL' -L '$SOCKET' -f /dev/null attach-session -t '$SESSION'" "/tmp/tabby-live-fuzz-attach-$$.typescript" >/tmp/tabby-live-fuzz-attach-$$.log 2>&1 &
 CLIENT_PID=$!
 wait_for 40 bash -lc "tmux -L '$SOCKET' -f /dev/null list-clients -F '#{session_name}' | grep -qx '$SESSION'"
 
+seed_tabby_tmux_env
 tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1
 tmx set-option -g @tabby_sidebar_position left

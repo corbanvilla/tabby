@@ -192,6 +192,137 @@ func TestShowSidebarSettingsMenuGeneratesLifecycleCommands(t *testing.T) {
 	}
 }
 
+func TestShowWindowContextMenuIncludesPositionSwapCommands(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.windows = []tmux.Window{
+		{
+			ID:    "@2",
+			Index: 2,
+			Name:  "beta",
+			Panes: []tmux.Pane{{ID: "%2", Active: true}},
+		},
+	}
+
+	var payload daemon.MenuPayload
+	c.OnSendMenu = func(clientID string, menu *daemon.MenuPayload) {
+		if clientID != "client-1" {
+			t.Fatalf("unexpected clientID: %s", clientID)
+		}
+		if menu != nil {
+			payload = *menu
+		}
+	}
+
+	c.showWindowContextMenu("client-1", "@2", menuPosition{PaneID: "%2", X: 6, Y: 8})
+
+	if payload.Title != "Window 2: beta" {
+		t.Fatalf("unexpected menu title: %q", payload.Title)
+	}
+
+	items := c.pendingMenus["client-1"]
+	var positionHeaderIndex = -1
+	var moveToGroupHeaderIndex = -1
+	for i, item := range items {
+		if item.Header && item.Label == "Move to Group" {
+			moveToGroupHeaderIndex = i
+		}
+		if item.Header && item.Label == "Position" {
+			positionHeaderIndex = i
+		}
+	}
+	if moveToGroupHeaderIndex < 0 {
+		t.Fatalf("missing Move to Group submenu header")
+	}
+	if positionHeaderIndex < 0 {
+		t.Fatalf("missing Position submenu header")
+	}
+	if positionHeaderIndex <= moveToGroupHeaderIndex {
+		t.Fatalf("expected Position submenu after Move to Group, got move=%d position=%d", moveToGroupHeaderIndex, positionHeaderIndex)
+	}
+
+	moveUp, ok := findMenuItem(items, "  Move Up")
+	if !ok {
+		t.Fatalf("missing Move Up menu item")
+	}
+	if moveUp.Key != "K" {
+		t.Fatalf("unexpected Move Up key: %q", moveUp.Key)
+	}
+	swapWindowScript := c.getScriptPath("swap_window.sh")
+	wantMoveUp := fmt.Sprintf("run-shell '%s :-1 @2 %s'", swapWindowScript, c.sessionID)
+	if moveUp.Command != wantMoveUp {
+		t.Fatalf("unexpected Move Up command:\n got %q\nwant %q", moveUp.Command, wantMoveUp)
+	}
+
+	moveDown, ok := findMenuItem(items, "  Move Down")
+	if !ok {
+		t.Fatalf("missing Move Down menu item")
+	}
+	if moveDown.Key != "J" {
+		t.Fatalf("unexpected Move Down key: %q", moveDown.Key)
+	}
+	wantMoveDown := fmt.Sprintf("run-shell '%s :+1 @2 %s'", swapWindowScript, c.sessionID)
+	if moveDown.Command != wantMoveDown {
+		t.Fatalf("unexpected Move Down command:\n got %q\nwant %q", moveDown.Command, wantMoveDown)
+	}
+}
+
+func TestShowGroupContextMenuIncludesPositionSwapCommands(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.grouped = []grouping.GroupedWindows{
+		{Name: "Default", Windows: []tmux.Window{{ID: "@1", Index: 1, Name: "default"}}},
+		{Name: "Work", Windows: []tmux.Window{{ID: "@2", Index: 2, Name: "work"}}},
+		{Name: "Play", Windows: []tmux.Window{{ID: "@3", Index: 3, Name: "play"}}},
+	}
+
+	var payload daemon.MenuPayload
+	c.OnSendMenu = func(clientID string, menu *daemon.MenuPayload) {
+		if clientID != "client-1" {
+			t.Fatalf("unexpected clientID: %s", clientID)
+		}
+		if menu != nil {
+			payload = *menu
+		}
+	}
+
+	c.showGroupContextMenu("client-1", "Work", menuPosition{PaneID: "%2", X: 9, Y: 4})
+
+	if payload.Title != "Group: Work (1 windows)" {
+		t.Fatalf("unexpected menu title: %q", payload.Title)
+	}
+
+	items := c.pendingMenus["client-1"]
+	positionHeader, ok := findMenuItem(items, "Position")
+	if !ok || !positionHeader.Header {
+		t.Fatalf("missing Position submenu header")
+	}
+
+	moveUp, ok := findMenuItem(items, "  Move Up")
+	if !ok {
+		t.Fatalf("missing Move Up menu item")
+	}
+	if moveUp.Key != "K" {
+		t.Fatalf("unexpected Move Up key: %q", moveUp.Key)
+	}
+	if !strings.Contains(moveUp.Command, "set-option -gq @tabby_group_order 'Work|Default|Play'") {
+		t.Fatalf("unexpected Move Up command: %q", moveUp.Command)
+	}
+	signalSidebarScript := c.getScriptPath("signal_sidebar.sh")
+	if !strings.Contains(moveUp.Command, signalSidebarScript) {
+		t.Fatalf("expected Move Up command to signal sidebar, got %q", moveUp.Command)
+	}
+
+	moveDown, ok := findMenuItem(items, "  Move Down")
+	if !ok {
+		t.Fatalf("missing Move Down menu item")
+	}
+	if moveDown.Key != "J" {
+		t.Fatalf("unexpected Move Down key: %q", moveDown.Key)
+	}
+	if !strings.Contains(moveDown.Command, "set-option -gq @tabby_group_order 'Default|Play|Work'") {
+		t.Fatalf("unexpected Move Down command: %q", moveDown.Command)
+	}
+}
+
 func TestRefreshSessionUpdatesAndFallsBack(t *testing.T) {
 	t.Run("updates_from_tmux", func(t *testing.T) {
 		installFakeTmux(t, `

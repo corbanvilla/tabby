@@ -41,6 +41,13 @@ export PATH="$WRAPPER_DIR:$PATH"
 
 tmux_session_id=""
 
+seed_tabby_tmux_env() {
+  local socket_path
+  socket_path="$(tmux display-message -p '#{socket_path}')"
+  tmux set-environment -g TABBY_TMUX_SOCKET "$socket_path"
+  tmux set-environment -g TABBY_TMUX_REAL "$(command -v tmux)"
+}
+
 cleanup() {
   local exit_code=$?
   [ -n "${MUTATE_PID:-}" ] && kill "$MUTATE_PID" >/dev/null 2>&1 || true
@@ -246,9 +253,10 @@ cleanup_orphan_window() {
 }
 
 attach_client() {
-  TERM=xterm script -q -c "TERM=xterm tmux attach-session -t '$SESSION_NAME'" "$ATTACH_TS" >"$ATTACH_LOG" 2>&1 &
+  wait_for 30 tmux has-session -t "$SESSION_NAME" >/dev/null 2>&1 || true
+  TERM=xterm script -q -c "TERM=xterm $(command -v tmux) -L '$TABBY_TEST_SOCKET' -f /dev/null attach-session -t '$SESSION_NAME'" "$ATTACH_TS" >"$ATTACH_LOG" 2>&1 &
   CLIENT_PID=$!
-  if ! wait_for 50 bash -lc "tmux list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$SESSION_NAME'"; then
+  if ! wait_for 50 bash -lc "$(command -v tmux) -L '$TABBY_TEST_SOCKET' -f /dev/null list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$SESSION_NAME'"; then
     die "failed to attach a real tmux client"
   fi
 }
@@ -350,6 +358,7 @@ run_mutator() {
 tmux start-server
 tmux kill-session -t "$SESSION_NAME" >/dev/null 2>&1 || true
 tmux new-session -d -s "$SESSION_NAME" -n main -c "$PROJECT_ROOT"
+seed_tabby_tmux_env
 tmux set-option -g @tabby_sidebar_position left
 tmux set-option -g @tabby_sidebar_mode full
 

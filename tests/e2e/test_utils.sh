@@ -1,23 +1,9 @@
 #!/usr/bin/env bash
 
-TABBY_TEST_SOCKET="${TABBY_TEST_SOCKET:-tabby-tests}"
-
-if [ -z "${TABBY_TMUX_WRAPPED:-}" ]; then
-    TABBY_TMUX_REAL="$(command -v tmux)"
-    TABBY_TMUX_WRAPPER_DIR="$(mktemp -d /tmp/tabby-tests-tmux.XXXXXX)"
-    cat > "$TABBY_TMUX_WRAPPER_DIR/tmux" <<EOF
-#!/usr/bin/env bash
-exec "$TABBY_TMUX_REAL" -L "$TABBY_TEST_SOCKET" -f /dev/null "\$@"
-EOF
-    chmod +x "$TABBY_TMUX_WRAPPER_DIR/tmux"
-    export PATH="$TABBY_TMUX_WRAPPER_DIR:$PATH"
-    export TABBY_TMUX_WRAPPED=1
-fi
-
-tmux() { command tmux "$@"; }
-
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+source "$PROJECT_ROOT/tests/lib/tmux_test_env.sh"
+tabby_init_tmux_test_env "tabby-tests"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -45,7 +31,6 @@ cleanup_test_session() {
     local session_name="${1:-test-session}"
     tmux kill-session -t "$session_name" 2>/dev/null || true
     tmux kill-server 2>/dev/null || true
-    pkill -f "tabby/bin/sidebar-renderer" 2>/dev/null || true
     rm -f /tmp/tabby-sidebar-*.state 2>/dev/null || true
 }
 

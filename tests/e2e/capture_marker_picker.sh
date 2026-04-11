@@ -7,6 +7,8 @@ else
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
   PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 fi
+source "$PROJECT_ROOT/tests/lib/tmux_test_env.sh"
+tabby_init_tmux_test_env "tabby-tests-marker-picker"
 
 TEST_SESSION="tabby-marker-picker-visual"
 SCREENSHOT_DIR="$PROJECT_ROOT/tests/screenshots/current"
@@ -19,6 +21,8 @@ cleanup() {
     kill "$CONTROL_CLIENT_PID" 2>/dev/null || true
   fi
   tmux kill-session -t "$TEST_SESSION" 2>/dev/null || true
+  tmux kill-server 2>/dev/null || true
+  tabby_cleanup_tmux_test_env
 }
 trap cleanup EXIT
 

@@ -324,6 +324,9 @@ func TestCheckAndClaimPid(t *testing.T) {
 	})
 
 	t.Run("unwritable_dir_returns_error", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can write read-only dirs; skip permission-negative test")
+		}
 		roDir := t.TempDir()
 		if err := os.Chmod(roDir, 0555); err != nil {
 			t.Skipf("cannot chmod dir: %v", err)

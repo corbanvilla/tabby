@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestPaneTargetRegex(t *testing.T) {
 	tests := []struct {
@@ -41,5 +44,29 @@ func TestPaneTargetRegex(t *testing.T) {
 				t.Fatalf("paneTargetRegex(%q) = %q, want %q", tt.input, got, tt.wantID)
 			}
 		})
+	}
+}
+
+func TestParseSystemPaneSnapshot(t *testing.T) {
+	raw := "@1\x1f%1\x1f0\x1fsidebar-renderer\x1fsidebar-renderer\n" +
+		"@1\x1f%2\x1f1\x1fsidebar-renderer\x1fsidebar-renderer\n" +
+		"@1\x1f%3\x1f0\x1fbash\x1f\n" +
+		"@2\\037%4\\0370\\037sidebar\\037sidebar\n" +
+		"@3\x1f%5\x1f0\x1fpane-header\x1fpane-header\n"
+
+	got := parseSystemPaneSnapshot(raw)
+
+	want := map[string]windowSystemPaneSnapshot{
+		"@1": {
+			liveSystemPanes: []string{"%1"},
+			deadSystemPanes: []string{"%2"},
+		},
+		"@2": {
+			liveSystemPanes: []string{"%4"},
+		},
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseSystemPaneSnapshot() = %#v, want %#v", got, want)
 	}
 }

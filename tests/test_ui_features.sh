@@ -4,8 +4,9 @@
 
 set -e
 
-TABBY_TEST_SOCKET="${TABBY_TEST_SOCKET:-tabby-tests-ui}"
-tmux() { command tmux -L "$TABBY_TEST_SOCKET" -f /dev/null "$@"; }
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd -P)"
+source "$PROJECT_ROOT/tests/lib/tmux_test_env.sh"
+tabby_init_tmux_test_env "tabby-tests-ui"
 
 # Colors for output
 RED='\033[0;31m'

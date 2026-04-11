@@ -14,12 +14,20 @@ env:
 
 jobs:
   build:
-    name: Build Linux (${{ matrix.arch }})
+    name: Build ${{ matrix.goos }} (${{ matrix.arch }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - goos: linux
+            arch: amd64
+          - goos: linux
+            arch: arm64
+          - goos: darwin
+            arch: amd64
+          - goos: darwin
+            arch: arm64
 
     steps:
       - name: Checkout
@@ -33,13 +41,13 @@ jobs:
 
       - name: Build binaries
         env:
-          GOOS: linux
+          GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.arch }}
         run: ./scripts/install.sh
 
       - name: Package release archive
         run: |
-          tar -czf "tabby-linux-${{ matrix.arch }}.tar.gz" \
+          tar -czf "tabby-${{ matrix.goos }}-${{ matrix.arch }}.tar.gz" \
             -C "$GITHUB_WORKSPACE" \
             bin/render-status \
             bin/render-tab \
@@ -53,8 +61,8 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tabby-linux-${{ matrix.arch }}
-          path: tabby-linux-${{ matrix.arch }}.tar.gz
+          name: tabby-${{ matrix.goos }}-${{ matrix.arch }}
+          path: tabby-${{ matrix.goos }}-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
 
   release:
@@ -77,3 +85,5 @@ jobs:
           files: |
             dist/tabby-linux-amd64/tabby-linux-amd64.tar.gz
             dist/tabby-linux-arm64/tabby-linux-arm64.tar.gz
+            dist/tabby-darwin-amd64/tabby-darwin-amd64.tar.gz
+            dist/tabby-darwin-arm64/tabby-darwin-arm64.tar.gz

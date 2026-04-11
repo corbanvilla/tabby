@@ -5,10 +5,14 @@ echo "=== Integration Test: Marker Search Script ==="
 
 SESSION_NAME="marker-test-$$"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." >/dev/null 2>&1 && pwd -P)"
+source "$PROJECT_ROOT/tests/lib/tmux_test_env.sh"
+tabby_init_tmux_test_env "tabby-tests-marker-search"
 SET_MARKER_SCRIPT="$PROJECT_ROOT/scripts/set_window_marker.sh"
 
 cleanup() {
     tmux kill-session -t "${SESSION_NAME}" 2>/dev/null || true
+    tmux kill-server 2>/dev/null || true
+    tabby_cleanup_tmux_test_env
 }
 
 trap cleanup EXIT

@@ -22,6 +22,13 @@ tmx() {
   "$tmux_real" -L "$SOCKET" -f /dev/null "$@"
 }
 
+seed_tabby_tmux_env() {
+  local socket_path
+  socket_path="$(tmx display-message -p '#{socket_path}')"
+  tmx set-environment -g TABBY_TMUX_SOCKET "$socket_path"
+  tmx set-environment -g TABBY_TMUX_REAL "$tmux_real"
+}
+
 wait_for() {
   local tries="$1"
   shift
@@ -73,6 +80,7 @@ start_attached_client() {
 
 tmx start-server
 tmx new-session -d -s "$SESSION" -n "main"
+seed_tabby_tmux_env
 start_attached_client
 tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1

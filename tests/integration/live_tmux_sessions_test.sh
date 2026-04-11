@@ -29,6 +29,14 @@ tmx() {
   "$tmux_real" -L "$socket" -f /dev/null "$@"
 }
 
+seed_tabby_tmux_env() {
+  local socket="$1"
+  local socket_path
+  socket_path="$(tmx "$socket" display-message -p '#{socket_path}')"
+  tmx "$socket" set-environment -g TABBY_TMUX_SOCKET "$socket_path"
+  tmx "$socket" set-environment -g TABBY_TMUX_REAL "$tmux_real"
+}
+
 wait_for() {
   local tries="$1"
   shift
@@ -61,12 +69,18 @@ enable_sidebar_for_window() {
   local socket="$1"
   local session="$2"
   local window_target="$3"
+  local session_id=""
   local attempt
+  session_id="$(tmx "$socket" display-message -p -t "$session:" '#{session_id}' 2>/dev/null || true)"
   for attempt in 1 2 3; do
     if wait_for 40 window_has_sidebar "$socket" "$window_target"; then
       return 0
     fi
-    tmx "$socket" run-shell -b -t "$session:" "$PROJECT_ROOT/scripts/ensure_sidebar.sh"
+    if [ -n "$session_id" ]; then
+      TABBY_TMUX_SOCKET="$(tmx "$socket" display-message -p '#{socket_path}')" TABBY_TMUX_REAL="$tmux_real" \
+        "$PROJECT_ROOT/scripts/signal_sidebar.sh" "$session_id" >/dev/null 2>&1 || true
+    fi
+    tmx "$socket" run-shell -b -t "$session:" "$PROJECT_ROOT/scripts/ensure_sidebar.sh _ \"$window_target\""
     sleep 0.4
   done
   return 1
@@ -117,6 +131,7 @@ start_attached_client() {
 echo "Starting isolated tmux server A ($SOCKET_A)"
 tmx "$SOCKET_A" start-server
 tmx "$SOCKET_A" new-session -d -s "$SESSION_A" -n "main"
+seed_tabby_tmux_env "$SOCKET_A"
 start_attached_client "$SOCKET_A" "$SESSION_A" "server-a-main"
 tmx "$SOCKET_A" run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1
@@ -160,6 +175,7 @@ else
 fi
 
 tmx "$SOCKET_A" new-session -d -s "$SESSION_A2" -n "second-session-main"
+seed_tabby_tmux_env "$SOCKET_A"
 start_attached_client "$SOCKET_A" "$SESSION_A2" "server-a-second"
 if enable_sidebar_for_session "$SOCKET_A" "$SESSION_A2"; then
   echo "✓ second session on same server received renderer"
@@ -172,6 +188,7 @@ fi
 echo "Starting isolated tmux server B ($SOCKET_B)"
 tmx "$SOCKET_B" start-server
 tmx "$SOCKET_B" new-session -d -s "$SESSION_B" -n "other-main"
+seed_tabby_tmux_env "$SOCKET_B"
 start_attached_client "$SOCKET_B" "$SESSION_B" "server-b-main"
 tmx "$SOCKET_B" run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1

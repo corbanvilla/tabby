@@ -1773,6 +1773,75 @@ func TestGroupWindowsWithOptions_OtherGroupsAlphabetical(t *testing.T) {
 	}
 }
 
+func TestGroupWindowsWithOptionsAndOrder_UsesRuntimeOrder(t *testing.T) {
+	windows := []tmux.Window{
+		{Index: 0, Name: "win0", Group: "Zebra"},
+		{Index: 1, Name: "win1", Group: ""},
+		{Index: 2, Name: "win2", Group: "Apple"},
+		{Index: 3, Name: "win3", Group: "Mango"},
+	}
+	groups := []config.Group{
+		{Name: "Default", Theme: config.Theme{Bg: "#3498db"}},
+		{Name: "Zebra", Theme: config.Theme{Bg: "#e74c3c"}},
+		{Name: "Apple", Theme: config.Theme{Bg: "#27ae60"}},
+		{Name: "Mango", Theme: config.Theme{Bg: "#f39c12"}},
+	}
+
+	result := GroupWindowsWithOptionsAndOrder(windows, groups, false, []string{"Mango", "Default", "Apple", "Zebra"})
+
+	got := make([]string, 0, len(result))
+	for _, group := range result {
+		if group.Name == "Pinned" {
+			continue
+		}
+		got = append(got, group.Name)
+	}
+
+	expected := []string{"Mango", "Default", "Apple", "Zebra"}
+	if len(got) != len(expected) {
+		t.Fatalf("expected %d groups, got %d (%v)", len(expected), len(got), got)
+	}
+	for i := range expected {
+		if got[i] != expected[i] {
+			t.Fatalf("group %d mismatch: got %q want %q (full=%v)", i, got[i], expected[i], got)
+		}
+	}
+}
+
+func TestGroupWindowsWithOptionsAndOrder_UnspecifiedGroupsRemainAlphabetical(t *testing.T) {
+	windows := []tmux.Window{
+		{Index: 0, Name: "win0", Group: "Zebra"},
+		{Index: 1, Name: "win1", Group: "Apple"},
+		{Index: 2, Name: "win2", Group: "Mango"},
+	}
+	groups := []config.Group{
+		{Name: "Default", Theme: config.Theme{Bg: "#3498db"}},
+		{Name: "Zebra", Theme: config.Theme{Bg: "#e74c3c"}},
+		{Name: "Apple", Theme: config.Theme{Bg: "#27ae60"}},
+		{Name: "Mango", Theme: config.Theme{Bg: "#f39c12"}},
+	}
+
+	result := GroupWindowsWithOptionsAndOrder(windows, groups, false, []string{"Zebra"})
+
+	got := make([]string, 0, len(result))
+	for _, group := range result {
+		if group.Name == "Pinned" {
+			continue
+		}
+		got = append(got, group.Name)
+	}
+
+	expected := []string{"Zebra", "Apple", "Mango"}
+	if len(got) != len(expected) {
+		t.Fatalf("expected %d groups, got %d (%v)", len(expected), len(got), got)
+	}
+	for i := range expected {
+		if got[i] != expected[i] {
+			t.Fatalf("group %d mismatch: got %q want %q (full=%v)", i, got[i], expected[i], got)
+		}
+	}
+}
+
 func TestGroupWindowsWithOptions_WindowsSortedByIndexWithinGroup(t *testing.T) {
 	// Test that windows are sorted by index within each group
 	windows := []tmux.Window{

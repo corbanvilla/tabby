@@ -20,6 +20,13 @@ tmx() {
   "$tmux_real" -L "$SOCKET" -f /dev/null "$@"
 }
 
+seed_tabby_tmux_env() {
+  local socket_path
+  socket_path="$(tmx display-message -p '#{socket_path}')"
+  tmx set-environment -g TABBY_TMUX_SOCKET "$socket_path"
+  tmx set-environment -g TABBY_TMUX_REAL "$tmux_real"
+}
+
 cleanup() {
   for pid in $CLIENT_PIDS; do
     kill "$pid" >/dev/null 2>&1 || true
@@ -99,6 +106,7 @@ start_attached_client() {
 echo "Bootstrapping isolated tmux server..."
 tmx start-server
 tmx new-session -d -s "$SESSION_MAIN" -n "main"
+seed_tabby_tmux_env
 start_attached_client "$SESSION_MAIN" "main"
 tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1

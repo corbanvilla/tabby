@@ -4,20 +4,32 @@ set -euo pipefail
 echo "=== Integration Test: AI Indicator State Transitions ==="
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." >/dev/null 2>&1 && pwd -P)"
+source "$PROJECT_ROOT/tests/lib/tmux_test_env.sh"
+tabby_init_tmux_test_env "tabby-tests-ai-indicator"
 SET_IND="$PROJECT_ROOT/scripts/set-tabby-indicator.sh"
+SESSION_NAME="ai-indicator-state-$$"
 
-WIN_IDX="$(tmux display-message -p '#{window_index}')"
-PANE_ID="$(tmux display-message -p '#{pane_id}')"
+tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+tmux new-session -d -s "$SESSION_NAME" -n "main"
+
+WIN_IDX="$(tmux display-message -t "$SESSION_NAME:0" -p '#{window_index}')"
+PANE_ID="$(tmux display-message -t "$SESSION_NAME:0.0" -p '#{pane_id}')"
 
 cleanup() {
   tmux set-option -w -t ":$WIN_IDX" -u @tabby_busy 2>/dev/null || true
   tmux set-option -w -t ":$WIN_IDX" -u @tabby_input 2>/dev/null || true
   tmux set-option -w -t ":$WIN_IDX" -u @tabby_bell 2>/dev/null || true
   tmux set-option -p -t "$PANE_ID" -u @tabby_bell 2>/dev/null || true
+  tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+  tmux kill-server 2>/dev/null || true
+  tabby_cleanup_tmux_test_env
 }
 trap cleanup EXIT
 
-cleanup
+tmux set-option -w -t ":$WIN_IDX" -u @tabby_busy 2>/dev/null || true
+tmux set-option -w -t ":$WIN_IDX" -u @tabby_input 2>/dev/null || true
+tmux set-option -w -t ":$WIN_IDX" -u @tabby_bell 2>/dev/null || true
+tmux set-option -p -t "$PANE_ID" -u @tabby_bell 2>/dev/null || true
 
 TMUX_PANE="$PANE_ID" "$SET_IND" busy 1
 BUSY_VAL="$(tmux show-window-options -t ":$WIN_IDX" -v @tabby_busy 2>/dev/null || true)"

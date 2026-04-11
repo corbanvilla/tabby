@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
-TABBY_TEST_SOCKET="${TABBY_TEST_SOCKET:-tabby-tests-visual}"
-tmux() { command tmux -L "$TABBY_TEST_SOCKET" -f /dev/null "$@"; }
-
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+source "$PROJECT_ROOT/tests/lib/tmux_test_env.sh"
+tabby_init_tmux_test_env "tabby-tests-visual"
 
 SCREENSHOT_DIR="tests/screenshots"
 mkdir -p "$SCREENSHOT_DIR"/{baseline,current,diffs}

@@ -15,6 +15,7 @@ if [ ! -x "$PROJECT_ROOT/bin/tabby-daemon" ] || [ ! -x "$PROJECT_ROOT/bin/sideba
 fi
 
 SOCKET="tabby-live-pane-bell-$$"
+SOCKET_PATH=""
 SESSION="live-pane-bell"
 CLIENT_PID=""
 TEST_HOME="$(mktemp -d)"
@@ -49,6 +50,12 @@ tmx() {
   HOME="$TEST_HOME" XDG_CONFIG_HOME="$TEST_XDG" "$tmux_real" -L "$SOCKET" -f /dev/null "$@"
 }
 
+seed_tabby_tmux_env() {
+  SOCKET_PATH="$(tmx display-message -p '#{socket_path}')"
+  tmx set-environment -g TABBY_TMUX_SOCKET "$SOCKET_PATH"
+  tmx set-environment -g TABBY_TMUX_REAL "$tmux_real"
+}
+
 wait_for() {
   local tries="$1"
   shift
@@ -75,10 +82,26 @@ trap cleanup EXIT
 start_attached_client() {
   local tty_dump="/tmp/tabby-live-pane-bell-tty-$$.typescript"
   local log_file="/tmp/tabby-live-pane-bell-client-$$.log"
-  HOME="$TEST_HOME" XDG_CONFIG_HOME="$TEST_XDG" TERM=xterm \
-    script -q -c "TERM=xterm $tmux_real -L $SOCKET -f /dev/null attach-session -t $SESSION" "$tty_dump" >"$log_file" 2>&1 &
-  CLIENT_PID=$!
-  wait_for 30 bash -lc "HOME='$TEST_HOME' XDG_CONFIG_HOME='$TEST_XDG' '$tmux_real' -L '$SOCKET' -f /dev/null list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$SESSION'"
+  local tmux_cmd
+  local attempt
+  for attempt in 1 2 3; do
+    [ -n "$CLIENT_PID" ] && kill "$CLIENT_PID" >/dev/null 2>&1 || true
+    if tmx has-session -t "$SESSION" >/dev/null 2>&1; then
+      tmux_cmd="TERM=xterm $tmux_real -L '$SOCKET' -f /dev/null attach-session -t '$SESSION'"
+    else
+      tmux_cmd="TERM=xterm $tmux_real -L '$SOCKET' -f /dev/null new-session -A -s '$SESSION' -n main 'exec bash -i'"
+    fi
+    HOME="$TEST_HOME" XDG_CONFIG_HOME="$TEST_XDG" TERM=xterm \
+      script -q -c "$tmux_cmd" "$tty_dump" >"$log_file" 2>&1 &
+    CLIENT_PID=$!
+    if wait_for 30 bash -lc "HOME='$TEST_HOME' XDG_CONFIG_HOME='$TEST_XDG' '$tmux_real' -L '$SOCKET' -f /dev/null list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$SESSION'"; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "failed to attach client"
+  [ -f "$log_file" ] && sed -n '1,80p' "$log_file" || true
+  return 1
 }
 
 pane_has_bell() {
@@ -92,8 +115,9 @@ pane_no_bell() {
 }
 
 tmx start-server
-tmx new-session -d -s "$SESSION" -n "main" 'exec bash -l'
 start_attached_client
+wait_for 20 tmx has-session -t "$SESSION"
+seed_tabby_tmux_env
 tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1
 
@@ -107,7 +131,7 @@ sleep 1
 tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/ensure_sidebar.sh"
 
 CONTENT_PANE="$(tmx list-panes -t "$SESSION:0" -F "#{pane_id} #{pane_current_command} #{pane_active}" | awk '$2!="sidebar-renderer" && $3=="1"{print $1; exit}')"
-tmx split-window -h -t "$CONTENT_PANE" 'exec bash -l'
+tmx split-window -h -t "$CONTENT_PANE" 'exec bash -i'
 sleep 1
 
 LEFT_PANE="$(tmx list-panes -t "$SESSION:0" -F "#{pane_id} #{pane_left} #{pane_current_command}" | awk '$3!="sidebar-renderer"{print $0}' | sort -k2,2n | head -n1 | awk '{print $1}')"
