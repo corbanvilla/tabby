@@ -302,12 +302,22 @@ else
     fi
 
     SOCKET_READY=false
-    for _ in $(seq 1 20); do
+    SOCKET_WAIT_INTERVAL="${TABBY_DAEMON_SOCKET_WAIT_INTERVAL:-0.05}"
+    SOCKET_WAIT_MAX="${TABBY_DAEMON_SOCKET_WAIT_MAX:-60}"
+    SOCKET_WAIT_COUNT=0
+    while [ "$SOCKET_WAIT_COUNT" -lt "$SOCKET_WAIT_MAX" ]; do
         if [ -S "$DAEMON_SOCK" ]; then
             SOCKET_READY=true
             break
         fi
-        sleep 0.02
+
+        DAEMON_PID=$(cat "$DAEMON_PID_FILE" 2>/dev/null || echo "")
+        if [ -n "$DAEMON_PID" ] && ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+            break
+        fi
+
+        sleep "$SOCKET_WAIT_INTERVAL"
+        SOCKET_WAIT_COUNT=$((SOCKET_WAIT_COUNT + 1))
     done
 
     if [ "$SOCKET_READY" = "false" ]; then
