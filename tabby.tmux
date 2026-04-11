@@ -327,12 +327,13 @@ tmux set-window-option -g window-size "latest"
 tmux unbind-key -T root MouseDown3Pane 2>/dev/null || true
 tmux bind-key -T root MouseDown3Pane send-keys -M -t =
 
-# Keep utility-pane drag events forwarded, but force tmux copy-drag in normal panes.
+# Keep utility-pane drag events forwarded, but let applications with mouse mode
+# handle drags in normal panes before falling back to tmux copy-drag.
 tmux unbind-key -T root MouseDrag1Pane 2>/dev/null || true
 tmux bind-key -T root MouseDrag1Pane \
     if-shell -F -t = "#{||:#{m:*sidebar-render*,#{pane_current_command}},#{m:*pane-header*,#{pane_current_command}}}" \
         "send-keys -M -t =" \
-        "select-pane -t = ; copy-mode -M"
+        "select-pane -t = ; if-shell -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send-keys -M -t =' 'copy-mode -M'"
 
 # Handle clicks on pane-header panes specially to allow buttons to work regardless of focus
 # Architecture: Only intercept pane-header clicks. Let sidebar and normal panes use default tmux behavior.
