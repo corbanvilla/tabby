@@ -8,10 +8,11 @@ CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && cd .. >/de
 source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "$CURRENT_DIR"
 SESSION_ID=$(tmux display-message -p '#{session_id}')
-SIDEBAR_STATE_FILE="/tmp/tabby-sidebar-${SESSION_ID}.state"
-DAEMON_SOCK="/tmp/tabby-daemon-${SESSION_ID}.sock"
-DAEMON_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
-DAEMON_EVENTS_LOG="/tmp/tabby-daemon-${SESSION_ID}-events.log"
+RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
+SIDEBAR_STATE_FILE="/tmp/${RUNTIME_PREFIX}tabby-sidebar-${SESSION_ID}.state"
+DAEMON_SOCK="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.sock"
+DAEMON_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"
+DAEMON_EVENTS_LOG="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}-events.log"
 
 read_sidebar_mode() {
     local mode=""
@@ -33,7 +34,7 @@ write_sidebar_mode() {
 }
 
 # --- Concurrency guard: prevent overlapping toggles (run-shell -b can fire multiple) ---
-TOGGLE_LOCK="/tmp/tabby-toggle-${SESSION_ID}.lock"
+TOGGLE_LOCK="/tmp/${RUNTIME_PREFIX}tabby-toggle-${SESSION_ID}.lock"
 if ! mkdir "$TOGGLE_LOCK" 2>/dev/null; then
     # Another toggle is already running — bail out silently
     exit 0
@@ -150,8 +151,8 @@ if [ -z "$SIDEBAR_MODE" ]; then SIDEBAR_MODE="full"; fi
 DAEMON_BIN="$CURRENT_DIR/bin/tabby-daemon"
 RENDERER_BIN="$CURRENT_DIR/bin/sidebar-renderer"
 WATCHDOG_SCRIPT="$CURRENT_DIR/scripts/watchdog_daemon.sh"
-CLEAN_STOP_SENTINEL="/tmp/tabby-daemon-${SESSION_ID}.clean-stop"
-WATCHDOG_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.watchdog.pid"
+CLEAN_STOP_SENTINEL="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.clean-stop"
+WATCHDOG_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.watchdog.pid"
 
 # Check if daemon binaries exist
 # Note: Old sidebar code archived in .archive/old-sidebar/ (not loaded by default)
@@ -348,8 +349,13 @@ else
     CYCLE_PANE_BIN="$CURRENT_DIR/bin/cycle-pane"
     tmux set-hook -g after-select-window "run-shell '$ON_WINDOW_SELECT_SCRIPT'; run-shell '$REFRESH_STATUS_SCRIPT'; run-shell -b '$TRACK_WINDOW_HISTORY_SCRIPT'; run-shell -b '$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\"'; run-shell -b '$STATUS_GUARD_SCRIPT \"#{session_id}\"'; run-shell -b 'if [ -x \"$CYCLE_PANE_BIN\" ]; then \"$CYCLE_PANE_BIN\" --dim-only; fi'"
 
-    # Fallback spawn: if daemon auto-spawn lags or misses a window, force renderer panes now.
-    spawn_missing_renderers_fallback
+    # Do not force a fallback spawn during normal startup.
+    # The daemon already owns renderer creation, and spawning here can race it,
+    # leaving duplicate sidebar panes in windows that connect moments later.
+    # Keep the fallback available as an explicit opt-in escape hatch.
+    if [ "${TABBY_ENABLE_FALLBACK_SPAWN:-0}" = "1" ]; then
+        spawn_missing_renderers_fallback
+    fi
 
     # Brief wait for daemon to start spawning renderers, then let it work asynchronously.
     # The daemon will spawn renderers via its ticker loop, and ensure_sidebar.sh will

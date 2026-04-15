@@ -37,9 +37,10 @@ if [ -z "$SESSION_ID" ]; then
     exec "$DAEMON_BIN" "$@"
 fi
 
-SENTINEL="/tmp/tabby-daemon-${SESSION_ID}.clean-stop"
-WATCHDOG_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.watchdog.pid"
-WATCHDOG_LOG="/tmp/tabby-daemon-${SESSION_ID}-crash.log"
+RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
+SENTINEL="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.clean-stop"
+WATCHDOG_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.watchdog.pid"
+WATCHDOG_LOG="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}-crash.log"
 
 # Write our PID so toggle scripts can kill us
 echo $$ > "$WATCHDOG_PID_FILE"
@@ -63,7 +64,7 @@ while true; do
     fi
 
     # If another daemon is already running, exit — we lost the race
-    DAEMON_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
+    DAEMON_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"
     if [ -f "$DAEMON_PID_FILE" ]; then
         OTHER_PID=$(cat "$DAEMON_PID_FILE" 2>/dev/null || echo "")
         if [ -n "$OTHER_PID" ] && kill -0 "$OTHER_PID" 2>/dev/null; then

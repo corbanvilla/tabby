@@ -9,6 +9,7 @@ import (
 	"github.com/brendandebeasi/tabby/pkg/config"
 	"github.com/brendandebeasi/tabby/pkg/grouping"
 	"github.com/brendandebeasi/tabby/pkg/tmux"
+	"github.com/brendandebeasi/tabby/pkg/version"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/stretchr/testify/assert"
 )
@@ -154,6 +155,17 @@ func TestGenerateSidebarHeader_WithTitle(t *testing.T) {
 	c.config.Sidebar.Header.Text = "MY SIDEBAR"
 	content, _ := c.generateSidebarHeader(30, "test-client")
 	assert.Contains(t, content, "MY SIDEBAR")
+}
+
+func TestGenerateSidebarHeader_ShowsReleaseVersionBadge(t *testing.T) {
+	prev := version.Version
+	version.Version = "v9.9.9-dirty"
+	defer func() { version.Version = prev }()
+
+	c := newRenderCoordinator(t)
+	content, _ := c.generateSidebarHeader(30, "test-client")
+	assert.Contains(t, content, "v9.9.9")
+	assert.NotContains(t, content, "v9.9.9-dirty")
 }
 
 func TestGenerateSidebarHeader_WithActiveWindow(t *testing.T) {

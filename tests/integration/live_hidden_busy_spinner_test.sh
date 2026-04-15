@@ -68,7 +68,7 @@ cleanup() {
     kill "$CLIENT_PID" >/dev/null 2>&1 || true
   fi
   tmx kill-server >/dev/null 2>&1 || true
-  rm -rf "$TEST_HOME"
+  rm -rf "$TEST_HOME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

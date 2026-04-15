@@ -34,6 +34,7 @@ if [ -z "$SESSION_ID" ]; then
     fi
 fi
 
+RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
 WINDOW_ID="${2:-}"
 
 if [ -z "$WINDOW_ID" ]; then
@@ -44,7 +45,7 @@ if [ -z "$WINDOW_ID" ] && [ -n "$SESSION_ID" ]; then
 fi
 
 # Debounce - skip if called within 1s to prevent redundant daemon checks
-DEBOUNCE_FILE="/tmp/tabby-ensure-debounce-${SESSION_ID:-default}-${WINDOW_ID:-current}.ts"
+DEBOUNCE_FILE="/tmp/${RUNTIME_PREFIX}tabby-ensure-debounce-${SESSION_ID:-default}-${WINDOW_ID:-current}.ts"
 DEBOUNCE_S=1
 
 if [ -f "$DEBOUNCE_FILE" ]; then
@@ -56,9 +57,9 @@ if [ -f "$DEBOUNCE_FILE" ]; then
     fi
 fi
 date +%s > "$DEBOUNCE_FILE"
-SIDEBAR_STATE_FILE="/tmp/tabby-sidebar-${SESSION_ID}.state"
-DAEMON_SOCK="/tmp/tabby-daemon-${SESSION_ID}.sock"
-DAEMON_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
+SIDEBAR_STATE_FILE="/tmp/${RUNTIME_PREFIX}tabby-sidebar-${SESSION_ID}.state"
+DAEMON_SOCK="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.sock"
+DAEMON_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"
 
 # Get saved sidebar width or default
 SIDEBAR_WIDTH=$(tmux show-option -gqv @tabby_sidebar_width)
@@ -104,7 +105,7 @@ if [ "$MODE" = "enabled" ]; then
         # Start daemon if needed - it will spawn renderers via its ticker loop
         if [ "$DAEMON_RUNNING" = "false" ]; then
             # Check if a watchdog is already running (race with toggle_sidebar_daemon)
-            WATCHDOG_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.watchdog.pid"
+            WATCHDOG_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.watchdog.pid"
             if [ -f "$WATCHDOG_PID_FILE" ]; then
                 WD_PID=$(cat "$WATCHDOG_PID_FILE" 2>/dev/null || echo "")
                 if [ -z "$WD_PID" ] || ! kill -0 "$WD_PID" 2>/dev/null; then
@@ -127,6 +128,13 @@ if [ "$MODE" = "enabled" ]; then
             done
             # Clear spawning guard - renderers should spawn soon
             tmux set-option -gu @tabby_spawning
+        elif [ -f "$DAEMON_PID_FILE" ]; then
+            # Daemon is healthy but this window is missing a renderer.
+            # Nudge the daemon to refresh its window inventory and spawn one.
+            DAEMON_PID=$(cat "$DAEMON_PID_FILE" 2>/dev/null || echo "")
+            if [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null; then
+                kill -USR1 "$DAEMON_PID" 2>/dev/null || true
+            fi
         fi
     fi
 fi

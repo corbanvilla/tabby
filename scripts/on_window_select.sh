@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Handler for window selection - signal daemon and update border color
 
+CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
+
 SPAWNING=$(tmux show-option -gqv @tabby_spawning 2>/dev/null || echo "")
 if [ "$SPAWNING" = "1" ]; then
     exit 0
@@ -23,7 +27,8 @@ case "$ACTIVE_CMD $ACTIVE_START" in
 esac
 
 # Signal daemon to refresh immediately (daemon handles width sync)
-DAEMON_PID_FILE="/tmp/tabby-daemon-$(tmux display-message -p '#{session_id}').pid"
+RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
+DAEMON_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-$(tmux display-message -p '#{session_id}').pid"
 [ -f "$DAEMON_PID_FILE" ] && kill -USR1 "$(cat "$DAEMON_PID_FILE")" 2>/dev/null || true
 
 # Update pane border color if border_from_tab is enabled

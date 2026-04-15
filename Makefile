@@ -1,10 +1,12 @@
-.PHONY: build test test-e2e test-live test-unit test-race test-cover vet ci capture-visual compare-visual update-baseline clean install
+.PHONY: build test test-e2e test-live test-unit test-race test-cover vet ci capture-visual compare-visual update-baseline clean install test-release
 
 # Go parameters
 GOCMD=go
 GOBUILD=$(GOCMD) build
 GOTEST=$(GOCMD) test
 GOMOD=$(GOCMD) mod
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+GO_LDFLAGS=-ldflags "-X github.com/brendandebeasi/tabby/pkg/version.Version=$(VERSION)"
 
 # Binary names
 RENDER_STATUS=bin/render-status
@@ -29,31 +31,31 @@ build: $(RENDER_STATUS) $(RENDER_TAB) $(TABBY_DAEMON) $(SIDEBAR_RENDERER) $(PANE
 
 $(RENDER_STATUS): cmd/render-status/main.go pkg/**/*.go
 	@mkdir -p $(BIN_DIR)
-	$(GOBUILD) -o $@ ./cmd/render-status
+	$(GOBUILD) $(GO_LDFLAGS) -o $@ ./cmd/render-status
 
 $(RENDER_TAB): cmd/render-tab/main.go
 	@mkdir -p $(BIN_DIR)
-	$(GOBUILD) -o $@ ./cmd/render-tab
+	$(GOBUILD) $(GO_LDFLAGS) -o $@ ./cmd/render-tab
 
 $(TABBY_DAEMON): cmd/tabby-daemon/*.go pkg/**/*.go
 	@mkdir -p $(BIN_DIR)
-	$(GOBUILD) -o $@ ./cmd/tabby-daemon
+	$(GOBUILD) $(GO_LDFLAGS) -o $@ ./cmd/tabby-daemon
 
 $(SIDEBAR_RENDERER): cmd/sidebar-renderer/main.go pkg/**/*.go
 	@mkdir -p $(BIN_DIR)
-	$(GOBUILD) -o $@ ./cmd/sidebar-renderer
+	$(GOBUILD) $(GO_LDFLAGS) -o $@ ./cmd/sidebar-renderer
 
 $(PANE_HEADER): cmd/pane-header/main.go pkg/**/*.go
 	@mkdir -p $(BIN_DIR)
-	$(GOBUILD) -o $@ ./cmd/pane-header
+	$(GOBUILD) $(GO_LDFLAGS) -o $@ ./cmd/pane-header
 
 $(MANAGE_GROUP): cmd/manage-group/main.go pkg/**/*.go
 	@mkdir -p $(BIN_DIR)
-	$(GOBUILD) -o $@ ./cmd/manage-group
+	$(GOBUILD) $(GO_LDFLAGS) -o $@ ./cmd/manage-group
 
 $(NEW_WINDOW): cmd/new-window/main.go pkg/**/*.go
 	@mkdir -p $(BIN_DIR)
-	$(GOBUILD) -o $@ ./cmd/new-window
+	$(GOBUILD) $(GO_LDFLAGS) -o $@ ./cmd/new-window
 
 # Download dependencies
 deps:
@@ -92,12 +94,27 @@ test-live: build
 	@bash $(TEST_DIR)/integration/live_tmux_sessions_test.sh
 	@bash $(TEST_DIR)/integration/live_socket_override_test.sh
 	@bash $(TEST_DIR)/integration/live_multiclient_same_session_test.sh
+	@bash $(TEST_DIR)/integration/window_exit_orphan_cleanup_test.sh
+	@bash $(TEST_DIR)/integration/new_window_quick_exit_cleanup_test.sh
+	@bash $(TEST_DIR)/integration/window_kill_focus_matrix_test.sh
+	@bash $(TEST_DIR)/integration/background_window_exit_stability_test.sh
 	@bash $(TEST_DIR)/integration/live_header_singleton_resilience_test.sh
 	@bash $(TEST_DIR)/integration/live_pane_bell_mock_app_test.sh
 	@bash $(TEST_DIR)/integration/live_sidebar_singleton_names_test.sh
 	@bash $(TEST_DIR)/integration/live_toggle_concurrency_test.sh
 	@bash $(TEST_DIR)/integration/live_trajectory_matrix_test.sh
 	@bash $(TEST_DIR)/integration/live_seeded_fuzz_trajectory_test.sh
+	@bash $(TEST_DIR)/integration/resurrect_integration_test.sh
+	@bash $(TEST_DIR)/integration/resurrect_autosave_integration_test.sh
+	@bash $(TEST_DIR)/integration/agent_session_resurrect_strategy_test.sh
+	@bash $(TEST_DIR)/integration/agent_session_resurrect_e2e_test.sh
+	@bash $(TEST_DIR)/integration/agent_session_resurrect_stress_test.sh
+
+test-release: build
+	$(GOTEST) ./...
+	@$(E2E_DIR)/run_e2e.sh
+	@$(MAKE) test-live
+	@TABBY_RUN_REAL_AGENT_SMOKE=$(TABBY_RUN_REAL_AGENT_SMOKE) bash $(TEST_DIR)/integration/real_agent_session_resurrect_smoke_test.sh
 
 # Capture visual screenshots
 capture-visual: build

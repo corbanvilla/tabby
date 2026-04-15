@@ -638,18 +638,23 @@ func cleanupOrphanWindowsByTmux(sessionID string) {
 		return
 	}
 
-	if out, err := exec.Command("tmux", "show-option", "-gqv", "@tabby_enable_orphan_window_kill").Output(); err != nil || strings.TrimSpace(string(out)) != "1" {
-		return
-	}
-
 	if out, err := exec.Command("tmux", "show-option", "-gqv", "@tabby_spawning").Output(); err == nil {
 		if strings.TrimSpace(string(out)) == "1" {
 			return
 		}
 	}
 	if out, err := exec.Command("tmux", "show-option", "-gqv", "@tabby_new_window_id").Output(); err == nil {
-		if strings.TrimSpace(string(out)) != "" {
-			return
+		pendingNew := strings.TrimSpace(string(out))
+		if pendingNew != "" {
+			if existingOut, listErr := exec.Command("tmux", "list-windows", "-t", sessionID, "-F", "#{window_id}").Output(); listErr == nil {
+				existing := strings.Split(strings.TrimSpace(string(existingOut)), "\n")
+				for _, rawWid := range existing {
+					if strings.TrimSpace(rawWid) == pendingNew {
+						return
+					}
+				}
+			}
+			exec.Command("tmux", "set-option", "-gu", "@tabby_new_window_id").Run()
 		}
 	}
 
@@ -714,7 +719,7 @@ func cleanupOrphanWindowsByTmux(sessionID string) {
 			orphanWindowFirstSeen[windowID] = now
 			continue
 		}
-		if now.Sub(firstSeen) < 5*time.Second {
+		if now.Sub(firstSeen) < 500*time.Millisecond {
 			continue
 		}
 
@@ -2043,12 +2048,18 @@ func main() {
 			case <-refreshTicker.C:
 				ok := runLoopTask("refresh_tick", 8*time.Second, func() {
 					// Fallback polling: always refresh windows (needed for staleness
-					// detection of stuck @tabby_busy), but only broadcast render and
-					// update header styles if the hash actually changed.
+					// detection of stuck @tabby_busy). Also run orphan/sidebar cleanup
+					// here so normal shell exits are recovered even if tmux does not
+					// emit a hook path that reaches signal_refresh/window_check.
 					coordinator.RefreshWindows()
+					windows := coordinator.GetWindows()
+					cleanupOrphanedSidebars(windows)
+					cleanupOrphanWindowsByTmux(*sessionID)
+					cleanupSidebarsForClosedWindows(server, windows)
 					currentHash := coordinator.GetWindowsHash()
 					if currentHash != lastWindowsHash {
 						updateHeaderBorderStyles(coordinator)
+						doPaneLayoutOps()
 						server.BroadcastRender()
 						lastWindowsHash = currentHash
 					}

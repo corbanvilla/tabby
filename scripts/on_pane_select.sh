@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Combined handler for pane selection - minimal for speed
 
+CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
+
 # optimization: Accept session ID as arg to avoid tmux call overhead
 SESSION_ID="$1"
 
@@ -24,7 +28,8 @@ tmux set-option -p -u @tabby_bell 2>/dev/null || true
 tmux set-option -p @tabby_input_ack 1 2>/dev/null || true
 
 # Signal daemon to refresh immediately
-DAEMON_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
+RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
+DAEMON_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"
 if [ -f "$DAEMON_PID_FILE" ]; then
     read -r PID < "$DAEMON_PID_FILE"
     kill -USR1 "$PID" 2>/dev/null || true

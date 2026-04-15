@@ -53,6 +53,23 @@ func TestMenuStartYClampsToScreen(t *testing.T) {
 	}
 }
 
+func TestMenuStartYClampsNearBottomEdge(t *testing.T) {
+	m := rendererModel{
+		height: 8,
+		menuY:  7,
+		menuItems: []daemon.MenuItemPayload{
+			{Label: "A"},
+			{Label: "B"},
+			{Label: "C"},
+			{Label: "D"},
+		},
+	}
+
+	if got := m.menuStartY(); got != 2 {
+		t.Fatalf("menuStartY() near bottom = %d, want %d", got, 2)
+	}
+}
+
 func TestMenuItemAtScreenYSkipsNonSelectable(t *testing.T) {
 	m := rendererModel{
 		width:  40,
@@ -73,6 +90,28 @@ func TestMenuItemAtScreenYSkipsNonSelectable(t *testing.T) {
 	}
 	if got := m.menuItemAtScreenY(5); got != -1 {
 		t.Fatalf("separator row should not be selectable, got %d", got)
+	}
+}
+
+func TestMenuItemAtScreenYWithBottomClamp(t *testing.T) {
+	m := rendererModel{
+		width:  40,
+		height: 8,
+		menuY:  7,
+		menuItems: []daemon.MenuItemPayload{
+			{Label: "First"},
+			{Label: "Second"},
+			{Label: "Third"},
+			{Label: "Fourth"},
+		},
+	}
+
+	startY := m.menuStartY()
+	if got := m.menuItemAtScreenY(startY + 1); got != 0 {
+		t.Fatalf("first item after bottom clamp = %d, want %d", got, 0)
+	}
+	if got := m.menuItemAtScreenY(startY + 4); got != 3 {
+		t.Fatalf("last item after bottom clamp = %d, want %d", got, 3)
 	}
 }
 

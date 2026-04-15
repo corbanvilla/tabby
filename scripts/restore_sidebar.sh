@@ -10,10 +10,11 @@ source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "$CURRENT_DIR"
 SESSION_ID=$(tmux display-message -p '#{session_id}' 2>/dev/null || echo "")
 if [ -z "$SESSION_ID" ]; then exit 0; fi
-SIDEBAR_STATE_FILE="/tmp/tabby-sidebar-${SESSION_ID}.state"
-DAEMON_SOCK="/tmp/tabby-daemon-${SESSION_ID}.sock"
-DAEMON_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
-DAEMON_EVENTS_LOG="/tmp/tabby-daemon-${SESSION_ID}-events.log"
+RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
+SIDEBAR_STATE_FILE="/tmp/${RUNTIME_PREFIX}tabby-sidebar-${SESSION_ID}.state"
+DAEMON_SOCK="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.sock"
+DAEMON_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"
+DAEMON_EVENTS_LOG="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}-events.log"
 
 restart_daemon_if_unresponsive() {
     get_file_size() {

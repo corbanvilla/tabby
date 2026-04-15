@@ -45,9 +45,11 @@ if [ -n "$NEW_WINDOW_ID" ] && [ -n "$SAVED_GROUP" ] && [ "$SAVED_GROUP" != "Defa
 fi
 
 if [ -n "$NEW_WINDOW_ID" ]; then
+    NEW_SESSION_ID=$(tmux display-message -p -t "$NEW_WINDOW_ID" "#{session_id}" 2>/dev/null || echo "")
     tmux set-option -g @tabby_new_window_id "$NEW_WINDOW_ID" 2>/dev/null || true
     tmux select-window -t "$NEW_WINDOW_ID" 2>/dev/null || true
     "$CURRENT_DIR/scripts/focus_new_window.sh" "$NEW_WINDOW_ID" >/dev/null 2>&1 &
+    ( sleep 0.35; "$CURRENT_DIR/scripts/cleanup_orphan_sidebar.sh" "$NEW_SESSION_ID" "$NEW_WINDOW_ID" >/dev/null 2>&1 || true ) &
     ( sleep 2; PENDING=$(tmux show-option -gqv @tabby_new_window_id 2>/dev/null || echo ""); [ "$PENDING" = "$NEW_WINDOW_ID" ] && tmux set-option -gu @tabby_new_window_id 2>/dev/null || true ) &
 fi
 

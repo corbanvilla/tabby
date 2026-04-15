@@ -3,6 +3,15 @@
 # Ensure Tabby processes consistently target the intended tmux server.
 # Supports explicit override via TABBY_TMUX_SOCKET.
 
+tabby_runtime_prefix_for_socket() {
+    local socket_path="${1:-}"
+    if [ -z "$socket_path" ]; then
+        printf '%s' "${TABBY_RUNTIME_PREFIX:-}"
+        return
+    fi
+    printf 'sock-%s-' "$(printf '%s' "$socket_path" | cksum | awk '{print $1}')"
+}
+
 tabby_init_tmux_socket_env() {
     local current_dir="${1:-}"
     local wrapper_path=""
@@ -50,5 +59,10 @@ tabby_init_tmux_socket_env() {
         export TABBY_TMUX_SOCKET="$socket_path"
     elif [ -n "${TABBY_TMUX_SOCKET:-}" ]; then
         export TABBY_TMUX_SOCKET
+    fi
+
+    if [ -n "${TABBY_TMUX_SOCKET:-}" ]; then
+        export TABBY_RUNTIME_PREFIX="$(tabby_runtime_prefix_for_socket "$TABBY_TMUX_SOCKET")"
+        tmux set-environment -g TABBY_RUNTIME_PREFIX "$TABBY_RUNTIME_PREFIX" >/dev/null 2>&1 || true
     fi
 }

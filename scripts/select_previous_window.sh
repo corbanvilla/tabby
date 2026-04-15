@@ -12,6 +12,9 @@ fi
 WINDOW_ROWS=$(tmux list-windows -F '#{window_index}|#{window_id}' 2>/dev/null || true)
 [ -z "$WINDOW_ROWS" ] && exit 0
 
+HISTORY=$(tmux show-option -gqv @tabby_window_history 2>/dev/null || echo "")
+EXISTING=$(tmux list-windows -F '#{window_id}' 2>/dev/null || true)
+
 pick_above_or_next() {
     local idx="$1"
     local best_above_idx=-999999
@@ -56,28 +59,36 @@ if [ "$ALLOW_SELECT" = "1" ] && [ -n "$CLOSED_INDEX" ] && [ "$CLOSED_INDEX" = "$
     esac
 fi
 
+if [ -z "$TARGET_ID" ] && [ -n "$CLOSED_INDEX" ] && [ -n "$HISTORY" ]; then
+    case "$CLOSED_INDEX" in
+        ''|*[!0-9]*) ;;
+        *)
+            FIRST_HISTORY="${HISTORY%%,*}"
+            if [ -n "$FIRST_HISTORY" ] && ! echo "$EXISTING" | grep -qFx "$FIRST_HISTORY"; then
+                TARGET_ID=$(pick_above_or_next "$CLOSED_INDEX" || true)
+            fi
+            ;;
+    esac
+fi
+
 if [ -n "$TARGET_ID" ]; then
     tmux select-window -t "$TARGET_ID" 2>/dev/null || true
 fi
 
-if [ -z "$TARGET_ID" ]; then
-    HISTORY=$(tmux show-option -gqv @tabby_window_history 2>/dev/null || echo "")
-    if [ -n "$HISTORY" ]; then
-        EXISTING=$(tmux list-windows -F '#{window_id}' 2>/dev/null || true)
-        IFS=',' read -ra ITEMS <<< "$HISTORY"
-        CLEANED=""
-        for item in "${ITEMS[@]}"; do
-            [ -z "$item" ] && continue
-            if echo "$EXISTING" | grep -qF "$item"; then
-                if [ -z "$CLEANED" ]; then
-                    CLEANED="$item"
-                else
-                    CLEANED="$CLEANED,$item"
-                fi
+if [ -n "$HISTORY" ]; then
+    IFS=',' read -ra ITEMS <<< "$HISTORY"
+    CLEANED=""
+    for item in "${ITEMS[@]}"; do
+        [ -z "$item" ] && continue
+        if echo "$EXISTING" | grep -qFx "$item"; then
+            if [ -z "$CLEANED" ]; then
+                CLEANED="$item"
+            else
+                CLEANED="$CLEANED,$item"
             fi
-        done
-        tmux set-option -g @tabby_window_history "$CLEANED"
-    fi
+        fi
+    done
+    tmux set-option -g @tabby_window_history "$CLEANED"
 fi
 
 exit 0

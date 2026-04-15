@@ -167,6 +167,7 @@ func main() {
 		debugLog("focusFirstContentPane completed")
 	}
 	scheduleFocusRecovery(newWindowID, clientTTY)
+	scheduleOrphanCleanup(newWindowID, sessionID)
 
 	if _, err := runTmuxOutput("set-option", "-gu", "@tabby_new_window_group"); err != nil {
 		debugLog("failed clearing @tabby_new_window_group: %v", err)
@@ -373,6 +374,28 @@ func scheduleFocusRecovery(windowID, clientTTY string) {
 	cmd := exec.Command(scriptPath, args...)
 	if err := cmd.Start(); err != nil {
 		debugLog("failed starting focus recovery for %s: %v", windowID, err)
+	}
+}
+
+func scheduleOrphanCleanup(windowID, sessionID string) {
+	if windowID == "" || sessionID == "" {
+		return
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		debugLog("orphan cleanup path resolution failed: %v", err)
+		return
+	}
+
+	scriptPath := filepath.Clean(filepath.Join(filepath.Dir(exe), "..", "scripts", "cleanup_orphan_sidebar.sh"))
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("sleep 0.35; %s %s %s >/dev/null 2>&1 || true",
+		shSingleQuote(scriptPath),
+		shSingleQuote(sessionID),
+		shSingleQuote(windowID),
+	))
+	if err := cmd.Start(); err != nil {
+		debugLog("failed starting orphan cleanup for %s: %v", windowID, err)
 	}
 }
 

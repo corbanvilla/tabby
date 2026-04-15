@@ -125,9 +125,34 @@ Tabby follows standard tmux keybindings. All standard tmux shortcuts work as exp
 |-----|--------|
 | `prefix + Tab` | Toggle vertical sidebar |
 | `prefix + G` | Create new group |
+| `prefix + o` or Cmd + backtick | Cycle active pane in the current window (skips Tabby utility panes) |
+| `prefix + M-k` | Move current window up within the tmux order |
+| `prefix + M-j` | Move current window down within the tmux order |
 | `Ctrl + <` or `Alt + <` | Collapse/expand sidebar |
 | `Cmd + Shift + \` | Collapse/expand sidebar (requires [terminal config](#sidebar-collapse-shortcut)) |
 | `Alt + a` | Toggle all-windows overview mode |
+
+
+#### Global shortcuts
+
+These are bound by default from `config.yaml` and work without the tmux prefix when your terminal sends the matching Meta/Cmd chord:
+
+| Key | Action |
+|-----|--------|
+| Cmd + Shift + ] | Next window |
+| Cmd + Shift + [ | Previous window |
+| Cmd + Shift + N | New window |
+| Cmd + Shift + W | Kill current window |
+
+#### Legacy Meta shortcuts
+
+| Key | Action |
+|-----|--------|
+| Alt + h | Previous window |
+| Alt + l | Next window |
+| Alt + n | New window |
+| Alt + q | Display pane numbers |
+| Alt + 0-9 | Switch to window by number |
 
 When the sidebar is focused, press `m` to open the marker picker for the active window.
 
@@ -141,6 +166,7 @@ When the sidebar is focused, press `m` to open the marker picker for the active 
   - Unlock Name (restore automatic naming)
   - Collapse/Expand Panes
   - Move to Group
+  - Position -> Move Up/Move Down
   - Set Marker (searchable emoji picker)
   - Set Tab Color (including transparent)
   - Split Horizontal/Vertical
@@ -152,10 +178,12 @@ When the sidebar is focused, press `m` to open the marker picker for the active 
   - Split pane
   - Focus pane
   - Break to new window
+  - Open in Finder
   - Close pane
 - **Right click on group**: Group management:
   - New window in group
   - Collapse/Expand group
+  - Position -> Move Up/Move Down
   - Rename group
   - Change group color
   - Set Marker (searchable emoji picker)

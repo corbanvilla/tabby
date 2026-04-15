@@ -17,8 +17,18 @@ tabby_init_tmux_test_env() {
     fi
 
     if [ -z "${TABBY_TMUX_REAL:-}" ]; then
-        TABBY_TMUX_REAL="$(command -v tmux)"
-        export TABBY_TMUX_REAL
+        local candidate
+        for candidate in /usr/bin/tmux /bin/tmux /opt/homebrew/bin/tmux /usr/local/bin/tmux; do
+            if [ -x "$candidate" ]; then
+                TABBY_TMUX_REAL="$candidate"
+                export TABBY_TMUX_REAL
+                break
+            fi
+        done
+        if [ -z "${TABBY_TMUX_REAL:-}" ]; then
+            TABBY_TMUX_REAL="$(command -v tmux)"
+            export TABBY_TMUX_REAL
+        fi
     fi
 
     if [ -z "${TABBY_TMUX_WRAPPER_DIR:-}" ] || [ ! -x "${TABBY_TMUX_WRAPPER_DIR:-}/tmux" ]; then

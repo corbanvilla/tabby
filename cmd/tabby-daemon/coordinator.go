@@ -33,6 +33,7 @@ import (
 	"github.com/brendandebeasi/tabby/pkg/paths"
 	"github.com/brendandebeasi/tabby/pkg/perf"
 	"github.com/brendandebeasi/tabby/pkg/tmux"
+	"github.com/brendandebeasi/tabby/pkg/version"
 )
 
 // coordinatorDebugLog is the logger for coordinator debug output
@@ -5420,6 +5421,7 @@ func (c *Coordinator) generateSidebarHeader(width int, clientID string) (string,
 		fgColor = c.getHeaderTextColorWithFallback("")
 	}
 	bgColor = normalizeTransparentColor(bgColor)
+	versionText := version.Release()
 
 	// Build style
 	headerStyle := lipgloss.NewStyle().
@@ -5457,6 +5459,11 @@ func (c *Coordinator) generateSidebarHeader(width int, clientID string) (string,
 	if bgColor != "" {
 		rowStyle = rowStyle.Background(lipgloss.Color(bgColor))
 	}
+	versionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(c.getInactiveTextColorWithFallback("")))
+	if bgColor != "" {
+		versionStyle = versionStyle.Background(lipgloss.Color(bgColor))
+	}
 
 	// Determine which row gets the text (vertical centering)
 	textRow := 0
@@ -5467,6 +5474,40 @@ func (c *Coordinator) generateSidebarHeader(width int, clientID string) (string,
 	// Render header rows
 	for line := 0; line < headerHeight; line++ {
 		if line == textRow {
+			if headerHeight == 1 && versionText != "" {
+				badgeWidth := uniseg.StringWidth(versionText)
+				nameBudget := width - badgeWidth - 2
+				if nameBudget < 1 {
+					nameBudget = 1
+				}
+				if nameWidth > nameBudget {
+					truncated := ""
+					w := 0
+					for _, r := range headerText {
+						rw := runewidth.RuneWidth(r)
+						if w+rw > nameBudget-1 {
+							break
+						}
+						truncated += string(r)
+						w += rw
+					}
+					headerText = truncated + "~"
+					nameWidth = uniseg.StringWidth(headerText)
+				}
+				spacerWidth := width - badgeWidth - nameWidth - 2
+				if spacerWidth < 0 {
+					spacerWidth = 0
+				}
+				s.WriteString(
+					rowStyle.Render(" ") +
+						versionStyle.Render(versionText) +
+						rowStyle.Render(" ") +
+						headerStyle.Render(headerText) +
+						rowStyle.Render(strings.Repeat(" ", spacerWidth)) +
+						"\n",
+				)
+				continue
+			}
 			if centered {
 				// Horizontal centering
 				leftPad := (width - nameWidth) / 2
@@ -5486,6 +5527,22 @@ func (c *Coordinator) generateSidebarHeader(width int, clientID string) (string,
 				}
 				s.WriteString(rowStyle.Render(" ") + headerStyle.Render(headerText) + rowStyle.Render(strings.Repeat(" ", spacerWidth)) + "\n")
 			}
+		} else if line == 0 && versionText != "" {
+			badgeWidth := uniseg.StringWidth(versionText)
+			if badgeWidth > width-1 {
+				badgeWidth = width - 1
+				versionText = runewidth.Truncate(versionText, badgeWidth, "")
+			}
+			spacerWidth := width - badgeWidth - 1
+			if spacerWidth < 0 {
+				spacerWidth = 0
+			}
+			s.WriteString(
+				rowStyle.Render(" ") +
+					versionStyle.Render(versionText) +
+					rowStyle.Render(strings.Repeat(" ", spacerWidth)) +
+					"\n",
+			)
 		} else {
 			s.WriteString(rowStyle.Render(strings.Repeat(" ", width)) + "\n")
 		}

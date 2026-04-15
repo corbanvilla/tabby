@@ -157,9 +157,11 @@ if [ -n "\$NEW_WINDOW_ID" ] && [ -n "\$SAVED_GROUP" ] && [ "\$SAVED_GROUP" != "D
 fi
 
 if [ -n "\$NEW_WINDOW_ID" ]; then
+    NEW_SESSION_ID=\$(tmux display-message -p -t "\$NEW_WINDOW_ID" "#{session_id}" 2>/dev/null || echo "")
     tmux set-option -g @tabby_new_window_id "\$NEW_WINDOW_ID" 2>/dev/null || true
     tmux select-window -t "\$NEW_WINDOW_ID" 2>/dev/null || true
     "\$CURRENT_DIR/scripts/focus_new_window.sh" "\$NEW_WINDOW_ID" >/dev/null 2>&1 &
+    ( sleep 0.35; "\$CURRENT_DIR/scripts/cleanup_orphan_sidebar.sh" "\$NEW_SESSION_ID" "\$NEW_WINDOW_ID" >/dev/null 2>&1 || true ) &
     ( sleep 2; PENDING=\$(tmux show-option -gqv @tabby_new_window_id 2>/dev/null || echo ""); [ "\$PENDING" = "\$NEW_WINDOW_ID" ] && tmux set-option -gu @tabby_new_window_id 2>/dev/null || true ) &
 fi
 
@@ -602,6 +604,10 @@ KILL_WINDOW_SCRIPT="$CURRENT_DIR/scripts/kill_window.sh"
 chmod +x "$KILL_WINDOW_SCRIPT"
 EXIT_IF_NO_MAIN_WINDOWS_SCRIPT="$CURRENT_DIR/scripts/exit_if_no_main_windows.sh"
 chmod +x "$EXIT_IF_NO_MAIN_WINDOWS_SCRIPT"
+CLEANUP_ORPHAN_SIDEBAR_SCRIPT="$CURRENT_DIR/scripts/cleanup_orphan_sidebar.sh"
+chmod +x "$CLEANUP_ORPHAN_SIDEBAR_SCRIPT"
+RETRY_CLEANUP_ORPHAN_SIDEBAR_SCRIPT="$CURRENT_DIR/scripts/retry_cleanup_orphan_sidebar.sh"
+chmod +x "$RETRY_CLEANUP_ORPHAN_SIDEBAR_SCRIPT"
 
 # Define save layout script early so it can be used in pane hooks
 SAVE_LAYOUT_SCRIPT="$CURRENT_DIR/scripts/save_pane_layout.sh"
@@ -623,7 +629,7 @@ tmux set-hook -g after-new-window "run-shell '$APPLY_GROUP_SCRIPT'; run-shell '$
 # Combined script to reduce latency + track window history
 ON_WINDOW_SELECT_SCRIPT="$CURRENT_DIR/scripts/on_window_select.sh"
 chmod +x "$ON_WINDOW_SELECT_SCRIPT"
-tmux set-hook -g after-select-window "run-shell '$ON_WINDOW_SELECT_SCRIPT'; run-shell '$REFRESH_STATUS_SCRIPT'; run-shell -b '$TRACK_WINDOW_HISTORY_SCRIPT'; run-shell -b '$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\"'; run-shell -b '$STATUS_GUARD_SCRIPT \"#{session_id}\"'; run-shell -b 'if [ -x \"$CYCLE_PANE_BIN\" ]; then \"$CYCLE_PANE_BIN\" --dim-only; fi'"
+tmux set-hook -g after-select-window "run-shell '$ON_WINDOW_SELECT_SCRIPT'; run-shell '$REFRESH_STATUS_SCRIPT'; run-shell '$TRACK_WINDOW_HISTORY_SCRIPT'; run-shell -b '$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\"'; run-shell -b '$STATUS_GUARD_SCRIPT \"#{session_id}\"'; run-shell -b 'if [ -x \"$CYCLE_PANE_BIN\" ]; then \"$CYCLE_PANE_BIN\" --dim-only; fi'"
 # Lock window name on manual rename via prefix+, keybinding
 # NOTE: We intentionally do NOT use after-rename-window hook because the daemon's
 # own rename-window calls would trigger it, locking the daemon out of future updates.
@@ -644,13 +650,17 @@ PRESERVE_NAME_SCRIPT="$CURRENT_DIR/scripts/preserve_window_name.sh"
 chmod +x "$PRESERVE_NAME_SCRIPT"
 tmux set-hook -g after-split-window "run-shell -b '$SIGNAL_SIDEBAR_SCRIPT #{session_id}'; run-shell '$PRESERVE_NAME_SCRIPT'; run-shell '$SAVE_LAYOUT_SCRIPT #{window_id} #{window_layout}'"
 
-# When a pane is killed: preserve ratios synchronously (must happen before tmux
-# reflows), then signal daemon in background. The daemon's USR1 handler takes
-# care of orphan cleanup and sidebar spawning.
-# Note: uses after-kill-pane (not pane-exited which doesn't exist in tmux 3.6+).
+# When a pane is killed explicitly: preserve ratios synchronously (must happen
+# before tmux reflows), then run targeted orphan cleanup in the affected window
+# before the broader refresh/signaling path.
 PRESERVE_RATIOS_SCRIPT="$CURRENT_DIR/scripts/preserve_pane_ratios.sh"
 chmod +x "$PRESERVE_RATIOS_SCRIPT"
-tmux set-hook -g after-kill-pane "run-shell '$PRESERVE_RATIOS_SCRIPT \"#{window_id}\"'; run-shell -b '$SIGNAL_SIDEBAR_SCRIPT; $EXIT_IF_NO_MAIN_WINDOWS_SCRIPT; $STATUS_GUARD_SCRIPT \"#{session_id}\"'"
+tmux set-hook -g after-kill-pane "run-shell '$PRESERVE_RATIOS_SCRIPT \"#{window_id}\"'; run-shell -b '$CLEANUP_ORPHAN_SIDEBAR_SCRIPT \"\" \"#{window_id}\"; \"$RETRY_CLEANUP_ORPHAN_SIDEBAR_SCRIPT\" \"\" \"#{window_id}\" >/dev/null 2>&1 & $SIGNAL_SIDEBAR_SCRIPT; $EXIT_IF_NO_MAIN_WINDOWS_SCRIPT; $STATUS_GUARD_SCRIPT \"#{session_id}\"'"
+
+# When a pane exits on its own (for example the shell receives `exit`), tmux
+# does not route through after-kill-pane. Clean up orphan sidebar windows here
+# too so content-pane exits do not leave a fullscreen renderer behind.
+tmux set-hook -g pane-exited "run-shell -b '$CLEANUP_ORPHAN_SIDEBAR_SCRIPT \"\" \"#{window_id}\"; \"$RETRY_CLEANUP_ORPHAN_SIDEBAR_SCRIPT\" \"\" \"#{window_id}\" >/dev/null 2>&1 & $SIGNAL_SIDEBAR_SCRIPT; $EXIT_IF_NO_MAIN_WINDOWS_SCRIPT; $STATUS_GUARD_SCRIPT \"#{session_id}\"'"
 
 # Restore sidebar when client reattaches to session
 tmux set-hook -g client-attached "run-shell '$RESTORE_SIDEBAR_SCRIPT'; run-shell '$STABILIZE_CLIENT_RESIZE_SCRIPT \"#{session_id}\" \"#{window_id}\" \"#{client_tty}\" \"#{client_width}\" \"#{client_height}\"'; run-shell '$STATUS_GUARD_SCRIPT \"#{session_id}\"'"
@@ -666,7 +676,11 @@ tmux set-hook -g client-resized "run-shell '$SIGNAL_SIDEBAR_SCRIPT'; run-shell '
 # tmux-resurrect integration (options are inert if resurrect is not installed)
 RESURRECT_SAVE_HOOK="$CURRENT_DIR/scripts/resurrect_save_hook.sh"
 RESURRECT_RESTORE_HOOK="$CURRENT_DIR/scripts/resurrect_restore_hook.sh"
-chmod +x "$RESURRECT_SAVE_HOOK" "$RESURRECT_RESTORE_HOOK"
+RESURRECT_SAVE_WRAPPER="$CURRENT_DIR/scripts/resurrect_save.sh"
+RESURRECT_RESTORE_WRAPPER="$CURRENT_DIR/scripts/resurrect_restore.sh"
+RESUME_CODEX_SCRIPT="$CURRENT_DIR/scripts/resume_codex_session.sh"
+RESUME_CLAUDE_SCRIPT="$CURRENT_DIR/scripts/resume_claude_session.sh"
+chmod +x "$RESURRECT_SAVE_HOOK" "$RESURRECT_RESTORE_HOOK" "$RESURRECT_SAVE_WRAPPER" "$RESURRECT_RESTORE_WRAPPER" "$RESUME_CODEX_SCRIPT" "$RESUME_CLAUDE_SCRIPT"
 
 EXISTING_SAVE_HOOK=$(tmux show-option -gqv @resurrect-hook-post-save-layout 2>/dev/null || echo "")
 if [ -z "$EXISTING_SAVE_HOOK" ] || echo "$EXISTING_SAVE_HOOK" | grep -q "tabby"; then
@@ -676,6 +690,44 @@ fi
 EXISTING_RESTORE_HOOK=$(tmux show-option -gqv @resurrect-hook-post-restore-all 2>/dev/null || echo "")
 if [ -z "$EXISTING_RESTORE_HOOK" ] || echo "$EXISTING_RESTORE_HOOK" | grep -q "tabby"; then
     tmux set-option -g @resurrect-hook-post-restore-all "$RESURRECT_RESTORE_HOOK"
+fi
+
+EXISTING_SAVE_PATH=$(tmux show-option -gqv @resurrect-save-script-path 2>/dev/null || echo "")
+if [ -z "$EXISTING_SAVE_PATH" ] || echo "$EXISTING_SAVE_PATH" | grep -Eq "tmux-resurrect|tabby"; then
+    tmux set-option -g @resurrect-save-script-path "$RESURRECT_SAVE_WRAPPER"
+fi
+
+EXISTING_RESTORE_PATH=$(tmux show-option -gqv @resurrect-restore-script-path 2>/dev/null || echo "")
+if [ -z "$EXISTING_RESTORE_PATH" ] || echo "$EXISTING_RESTORE_PATH" | grep -Eq "tmux-resurrect|tabby"; then
+    tmux set-option -g @resurrect-restore-script-path "$RESURRECT_RESTORE_WRAPPER"
+fi
+
+RESURRECT_SAVE_KEYS=$(tmux show-option -gqv @resurrect-save 2>/dev/null || echo "C-s")
+for RESURRECT_SAVE_KEY in $RESURRECT_SAVE_KEYS; do
+    tmux bind-key "$RESURRECT_SAVE_KEY" run-shell "$RESURRECT_SAVE_WRAPPER"
+done
+
+RESURRECT_RESTORE_KEYS=$(tmux show-option -gqv @resurrect-restore 2>/dev/null || echo "C-r")
+for RESURRECT_RESTORE_KEY in $RESURRECT_RESTORE_KEYS; do
+    tmux bind-key "$RESURRECT_RESTORE_KEY" run-shell "$RESURRECT_RESTORE_WRAPPER"
+done
+
+EXISTING_RESURRECT_PROCS=$(tmux show-option -gqv @resurrect-processes 2>/dev/null || echo "")
+TABBY_RESURRECT_PROCS="$EXISTING_RESURRECT_PROCS"
+case "$TABBY_RESURRECT_PROCS" in
+    *resume_codex_session.sh*) ;;
+    *)
+        TABBY_RESURRECT_PROCS="${TABBY_RESURRECT_PROCS:+$TABBY_RESURRECT_PROCS }\"~resume_codex_session.sh\""
+        ;;
+esac
+case "$TABBY_RESURRECT_PROCS" in
+    *resume_claude_session.sh*) ;;
+    *)
+        TABBY_RESURRECT_PROCS="${TABBY_RESURRECT_PROCS:+$TABBY_RESURRECT_PROCS }\"~resume_claude_session.sh\""
+        ;;
+esac
+if [ "$TABBY_RESURRECT_PROCS" != "$EXISTING_RESURRECT_PROCS" ]; then
+    tmux set-option -g @resurrect-processes "$TABBY_RESURRECT_PROCS"
 fi
 
 # Keep tmux native chooser shortcuts available
