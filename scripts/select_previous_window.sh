@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+set -u
+
+CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
 CLOSED_INDEX="${1:-}"
 
 ALLOW_SELECT=$(tmux show-option -gqv @tabby_close_select_window 2>/dev/null || echo "")
@@ -73,6 +78,9 @@ fi
 
 if [ -n "$TARGET_ID" ]; then
     tmux select-window -t "$TARGET_ID" 2>/dev/null || true
+    TARGET_SESSION_ID=$(tmux display-message -p -t "$TARGET_ID" "#{session_id}" 2>/dev/null || echo "")
+    "$CURRENT_DIR/scripts/signal_sidebar.sh" "$TARGET_SESSION_ID" >/dev/null 2>&1 || true
+    "$CURRENT_DIR/scripts/refresh_status.sh" >/dev/null 2>&1 || true
 fi
 
 if [ -n "$HISTORY" ]; then

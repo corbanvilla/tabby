@@ -194,10 +194,22 @@ else
   if [ "$AFTER" -eq "$((BEFORE + 1))" ]; then
     NEWEST_WIN=$(tmux list-windows -t "$TEST_SESSION" -F '#{window_id}' | tail -1)
     GROUP=$(tmux show-window-options -t "$NEWEST_WIN" -v @tabby_group 2>/dev/null || echo "")
+    WINDOW_NAME=$(tmux display-message -p -t "$NEWEST_WIN" '#{window_name}' 2>/dev/null || echo "")
+    NAME_LOCKED=$(tmux show-window-options -t "$NEWEST_WIN" -v @tabby_name_locked 2>/dev/null || echo "")
     if [ "$GROUP" = "AtomicTestGroup" ]; then
       pass "New window has group 'AtomicTestGroup'"
     else
       fail "New window group is '$GROUP', expected 'AtomicTestGroup'"
+    fi
+    if [ "$WINDOW_NAME" = "AtomicTestGroup|" ]; then
+      pass "Atomic grouped new window starts with group-prefixed name"
+    else
+      fail "Atomic grouped new window name is '$WINDOW_NAME', expected 'AtomicTestGroup|'"
+    fi
+    if [ "$NAME_LOCKED" = "1" ]; then
+      pass "Atomic grouped new window locks its initial group-prefixed name"
+    else
+      fail "Atomic grouped new window name lock is '$NAME_LOCKED', expected '1'"
     fi
   else
     fail "Window not created for group test"

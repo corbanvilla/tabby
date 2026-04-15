@@ -117,6 +117,30 @@ session_has_sidebar() {
     | grep -Eq "(sidebar-renderer|sidebar)"
 }
 
+sidebar_pane_for_window() {
+  local target="$1"
+  tmx list-panes -t "$target" -F "#{pane_id}|#{pane_current_command}|#{pane_start_command}" 2>/dev/null \
+    | awk -F'|' '$2 ~ /(sidebar-renderer|sidebar)/ || $3 ~ /(sidebar-renderer|sidebar)/ {print $1; exit}'
+}
+
+sidebar_for_window_contains() {
+  local target="$1"
+  local needle="$2"
+  local pane
+  pane="$(sidebar_pane_for_window "$target")"
+  [ -n "$pane" ] || return 1
+  tmx capture-pane -p -t "$pane" -S -200 2>/dev/null | grep -Fq "$needle"
+}
+
+sidebar_for_window_lacks() {
+  local target="$1"
+  local needle="$2"
+  local pane
+  pane="$(sidebar_pane_for_window "$target")"
+  [ -n "$pane" ] || return 1
+  ! tmx capture-pane -p -t "$pane" -S -200 2>/dev/null | grep -Fq "$needle"
+}
+
 window_has_only_system_panes() {
   local target="$1"
   local summary
@@ -204,6 +228,13 @@ reset_three_window_session() {
   tmx new-session -d -s "$SESSION" -n "zero"
   tmx new-window -t "$SESSION:" -n "one"
   tmx new-window -t "$SESSION:" -n "two"
+  tmx set-option -g @tabby_auto_rename off
+  tmx rename-window -t "$SESSION:0" "zero"
+  tmx set-window-option -t "$SESSION:0" @tabby_name_locked 1
+  tmx rename-window -t "$SESSION:1" "one"
+  tmx set-window-option -t "$SESSION:1" @tabby_name_locked 1
+  tmx rename-window -t "$SESSION:2" "two"
+  tmx set-window-option -t "$SESSION:2" @tabby_name_locked 1
   session_id="$(tmx display-message -p -t "$SESSION:" '#{session_id}' 2>/dev/null || true)"
   SESSION_ID="$session_id"
   if [ -n "$session_id" ]; then
@@ -224,12 +255,14 @@ reset_three_window_session() {
 assert_active_kill_focus() {
   local closed_index="$1"
   local expected_focus="$2"
-  local closed_window_id expected_focus_id
+  local closed_window_id expected_focus_id closed_window_name expected_window_name
 
   closed_window_id="$(tmx display-message -p -t "$SESSION:$closed_index" "#{window_id}" 2>/dev/null || true)"
   expected_focus_id="$(tmx display-message -p -t "$SESSION:$expected_focus" "#{window_id}" 2>/dev/null || true)"
+  closed_window_name="$(tmx display-message -p -t "$SESSION:$closed_index" "#{window_name}" 2>/dev/null || true)"
+  expected_window_name="$(tmx display-message -p -t "$SESSION:$expected_focus" "#{window_name}" 2>/dev/null || true)"
 
-  tmx select-window -t "$SESSION:$closed_index"
+  tmx switch-client -t "$SESSION:$closed_index" 2>/dev/null || tmx select-window -t "$SESSION:$closed_index"
   if ! wait_for 30 client_window_is "$closed_window_id"; then
     echo "✗ failed to focus window $closed_index before killing it"
     dump_state
@@ -256,6 +289,18 @@ assert_active_kill_focus() {
   if ! wait_for 50 no_orphan_windows; then
     echo "✗ killing active window $closed_index left a renderer-only orphan"
     dump_state
+    exit 1
+  fi
+  if ! wait_for 50 sidebar_for_window_contains "$expected_focus_id" "$expected_window_name"; then
+    echo "✗ sidebar in focused window $expected_focus did not refresh to include the surviving target window"
+    pane="$(sidebar_pane_for_window "$expected_focus_id")"
+    [ -n "$pane" ] && tmx capture-pane -p -t "$pane" -S -200 || true
+    exit 1
+  fi
+  if ! wait_for 50 sidebar_for_window_lacks "$expected_focus_id" "$closed_window_name"; then
+    echo "✗ sidebar in focused window $expected_focus still shows the killed window $closed_window_name"
+    pane="$(sidebar_pane_for_window "$expected_focus_id")"
+    [ -n "$pane" ] && tmx capture-pane -p -t "$pane" -S -200 || true
     exit 1
   fi
 

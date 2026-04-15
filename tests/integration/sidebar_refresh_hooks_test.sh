@@ -11,6 +11,8 @@ RENAME_PANE_SCRIPT="$PROJECT_ROOT/scripts/rename_pane.sh"
 export TABBY_TMUX_REAL="${TABBY_TMUX_REAL:-$(command -v tmux)}"
 source "$PROJECT_ROOT/tests/lib/tmux_test_env.sh"
 tabby_init_tmux_test_env "tabby-tests-sidebar-refresh"
+source "$PROJECT_ROOT/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$PROJECT_ROOT"
 
 TEST_SESSION="tabby-sidebar-refresh"
 SIGNAL_DIR="$(mktemp -d /tmp/tabby-sidebar-refresh.XXXXXX)"
@@ -28,6 +30,14 @@ cleanup() {
     rm -rf "$SIGNAL_DIR"
 }
 trap cleanup EXIT
+
+start_listener() {
+    [ -n "${LISTENER_PID:-}" ] && kill "$LISTENER_PID" >/dev/null 2>&1 || true
+    : > "$SIGNAL_LOG"
+    "$LISTENER_SCRIPT" &
+    LISTENER_PID="$!"
+    printf '%s\n' "$LISTENER_PID" > "$PID_FILE"
+}
 
 wait_for() {
     local tries="$1"
@@ -53,6 +63,7 @@ tmux new-session -d -s "$TEST_SESSION" -n main
 bash "$PROJECT_ROOT/tabby.tmux"
 
 SESSION_ID="$(tmux display-message -p -t "$TEST_SESSION:" '#{session_id}')"
+WINDOW_ID="$(tmux display-message -p -t "$TEST_SESSION:0" '#{window_id}')"
 PANE_ID="$(tmux display-message -p -t "$TEST_SESSION:0.0" '#{pane_id}')"
 PID_FILE="/tmp/${TABBY_RUNTIME_PREFIX:-}tabby-daemon-${SESSION_ID}.pid"
 
@@ -65,9 +76,7 @@ done
 EOF
 chmod +x "$LISTENER_SCRIPT"
 
-"$LISTENER_SCRIPT" &
-LISTENER_PID="$!"
-printf '%s\n' "$LISTENER_PID" > "$PID_FILE"
+start_listener
 
 bash "$SIGNAL_SCRIPT" "$SESSION_ID"
 if wait_for 30 signal_count_at_least 1; then
@@ -77,16 +86,26 @@ else
     exit 1
 fi
 
+start_listener
+bash "$SIGNAL_SCRIPT" "$WINDOW_ID"
+if wait_for 60 signal_count_at_least 1; then
+    echo "✓ signal_sidebar resolves session ids from window targets"
+else
+    echo "✗ signal_sidebar did not resolve a session id from the window target"
+    exit 1
+fi
+
+start_listener
 bash "$RENAME_PANE_SCRIPT" "$PANE_ID" "focus-pane"
 if [ "$(tmux show-options -pv -t "$PANE_ID" @tabby_pane_title 2>/dev/null || true)" = "focus-pane" ] && \
-   wait_for 30 signal_count_at_least 2; then
+   wait_for 60 signal_count_at_least 1; then
     echo "✓ rename_pane updates pane title and signals a sidebar refresh"
 else
     echo "✗ rename_pane did not update pane title or refresh signal"
     exit 1
 fi
 
-if tmux show-hooks -g after-rename-window | grep -q "signal_sidebar" && \
+if tmux show-hooks -g after-rename-window | grep -q "on_window_renamed.sh" && \
    tmux show-hooks -g pane-title-changed | grep -q "signal_sidebar"; then
     echo "✓ rename hooks trigger sidebar refresh for window and pane title changes"
 else

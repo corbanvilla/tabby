@@ -869,6 +869,17 @@ func (c *Coordinator) getInactiveTextColorWithFallback(configColor string) strin
 	return c.bgDetector.GetDefaultInactiveTextColor()
 }
 
+// getSidebarActiveLabelFg returns the foreground used for selected window labels
+// in the sidebar list. Default this to black for readability on the accent
+// backgrounds used by the grouped/window list, while still allowing explicit
+// config overrides.
+func (c *Coordinator) getSidebarActiveLabelFg() string {
+	if c.config.Sidebar.Colors.ActiveFg != "" {
+		return c.config.Sidebar.Colors.ActiveFg
+	}
+	return "#000000"
+}
+
 // getPaneFgWithFallback returns pane text color, falling back to inactive_fg
 func (c *Coordinator) getPaneFgWithFallback() string {
 	if c.config.Sidebar.Colors.PaneFg != "" {
@@ -5780,10 +5791,7 @@ func (c *Coordinator) generateMainContent(clientID string, width, height int) (s
 			if isTransparent {
 				bgColor = ""
 				if isActive {
-					fgColor = theme.ActiveFg
-					if fgColor == "" {
-						fgColor = theme.Fg
-					}
+					fgColor = c.getSidebarActiveLabelFg()
 				} else {
 					fgColor = inactiveFg
 				}
@@ -5793,16 +5801,17 @@ func (c *Coordinator) generateMainContent(clientID string, width, height int) (s
 				} else {
 					bgColor = grouping.ShadeColorByIndex(win.CustomColor, 1)
 				}
-				fgColor = "#ffffff"
+				if isActive {
+					fgColor = c.getSidebarActiveLabelFg()
+				} else {
+					fgColor = "#ffffff"
+				}
 			} else if isActive {
 				bgColor = theme.ActiveBg
 				if bgColor == "" {
 					bgColor = theme.Bg
 				}
-				fgColor = theme.ActiveFg
-				if fgColor == "" {
-					fgColor = theme.Fg
-				}
+				fgColor = c.getSidebarActiveLabelFg()
 			} else {
 				bgColor = theme.Bg
 				fgColor = inactiveFg
@@ -6347,10 +6356,7 @@ func (c *Coordinator) generatePrefixModeContent(clientID string, width, height i
 		if isTransparent {
 			bgColor = ""
 			if isActive {
-				fgColor = theme.ActiveFg
-				if fgColor == "" {
-					fgColor = theme.Fg
-				}
+				fgColor = c.getSidebarActiveLabelFg()
 			} else {
 				fgColor = inactiveFg
 			}
@@ -6361,16 +6367,17 @@ func (c *Coordinator) generatePrefixModeContent(clientID string, width, height i
 				bgColor = grouping.ShadeColorByIndex(win.CustomColor, 1)
 			}
 			// Custom colors typically have dark backgrounds, use white text
-			fgColor = "#ffffff"
+			if isActive {
+				fgColor = c.getSidebarActiveLabelFg()
+			} else {
+				fgColor = "#ffffff"
+			}
 		} else if isActive {
 			bgColor = theme.ActiveBg
 			if bgColor == "" {
 				bgColor = theme.Bg
 			}
-			fgColor = theme.ActiveFg
-			if fgColor == "" {
-				fgColor = theme.Fg
-			}
+			fgColor = c.getSidebarActiveLabelFg()
 		} else {
 			bgColor = theme.Bg
 			fgColor = inactiveFg

@@ -206,6 +206,17 @@ func TestGenerateMainContent_WithWindows(t *testing.T) {
 	assert.NotEmpty(t, regions)
 }
 
+func TestGetSidebarActiveLabelFg_DefaultsToBlack(t *testing.T) {
+	c := newRenderCoordinator(t)
+	assert.Equal(t, "#000000", c.getSidebarActiveLabelFg())
+}
+
+func TestGetSidebarActiveLabelFg_ConfigWins(t *testing.T) {
+	c := newRenderCoordinator(t)
+	c.config.Sidebar.Colors.ActiveFg = "#112233"
+	assert.Equal(t, "#112233", c.getSidebarActiveLabelFg())
+}
+
 func TestGenerateMainContent_ActiveWindowMatchesClient(t *testing.T) {
 	c := newRenderCoordinator(t)
 	c.stateMu.Lock()

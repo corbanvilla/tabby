@@ -26,6 +26,7 @@ esac
 # Resolve config path via XDG helper (never read $CURRENT_DIR/config.yaml directly)
 source "$CURRENT_DIR/scripts/_config_path.sh"
 CONFIG_FILE="$TABBY_CONFIG_FILE"
+RENAME_WINDOW_SCRIPT="$CURRENT_DIR/scripts/rename_window.sh"
 
 # Optional kill-switch for troubleshooting.
 # Tabby is enabled by default unless explicitly disabled.
@@ -116,6 +117,17 @@ set -u
 
 CLIENT_TTY="\${1:-}"
 CURRENT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
+source "\$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "\$CURRENT_DIR"
+
+initial_window_name_for_group() {
+    local group="\$1"
+    group="\$(printf "%s" "\$group" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    if [ -z "\$group" ] || [ "\$group" = "Default" ]; then
+        return 0
+    fi
+    printf "%s|\\n" "\$group"
+}
 
 SAVED_GROUP=\$(tmux show-option -gqv @tabby_new_window_group 2>/dev/null || echo "")
 SAVED_PATH=\$(tmux show-option -gqv @tabby_new_window_path 2>/dev/null || echo "")
@@ -155,6 +167,11 @@ NEW_WINDOW_ID=\$(printf "%s" "\$NEW_WINDOW_ID" | tr -d '\r\n')
 
 if [ -n "\$NEW_WINDOW_ID" ] && [ -n "\$SAVED_GROUP" ] && [ "\$SAVED_GROUP" != "Default" ]; then
     tmux set-window-option -t "\$NEW_WINDOW_ID" @tabby_group "\$SAVED_GROUP" 2>/dev/null || true
+    INITIAL_NAME=\$(initial_window_name_for_group "\$SAVED_GROUP")
+    if [ -n "\$INITIAL_NAME" ]; then
+        tmux rename-window -t "\$NEW_WINDOW_ID" "\$INITIAL_NAME" 2>/dev/null || true
+        tmux set-window-option -t "\$NEW_WINDOW_ID" @tabby_name_locked 1 2>/dev/null || true
+    fi
 fi
 
 if [ -n "\$NEW_WINDOW_ID" ]; then
@@ -533,11 +550,13 @@ if [[ "$POSITION" == "top" ]] || [[ "$POSITION" == "bottom" ]]; then
     
     tmux set-window-option -g window-status-separator ""
     
+    chmod +x "$RENAME_WINDOW_SCRIPT"
+
     # Mouse bindings for tabs
     tmux set-option -g mouse on
     tmux bind-key -T root MouseDown1Status select-window -t =
     tmux bind-key -T root MouseDown2Status run-shell "$CURRENT_DIR/scripts/kill_window.sh #{window_index}"
-    tmux bind-key -T root MouseDown3Status command-prompt -I "#W" "rename-window '%%' ; set-window-option @tabby_name_locked 1 ; run-shell '$SIGNAL_SIDEBAR_SCRIPT' ; run-shell '$REFRESH_STATUS_SCRIPT'"
+    tmux bind-key -T root MouseDown3Status command-prompt -I "#W" "run-shell '$RENAME_WINDOW_SCRIPT #{window_id} \"%%\"'"
     tmux bind-key -T root MouseDown1StatusRight new-window
 fi
 
@@ -553,7 +572,31 @@ CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
 source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "$CURRENT_DIR"
 
-SESSION_ID="${1:-$(tmux display-message -p '#{session_id}')}"
+TARGET_ID="${1:-}"
+SESSION_ID=""
+
+if [ -n "$TARGET_ID" ]; then
+    case "$TARGET_ID" in
+        \$*)
+            SESSION_ID="$TARGET_ID"
+            ;;
+        @*)
+            SESSION_ID="$(tmux list-windows -a -F '#{window_id}|#{session_id}' 2>/dev/null | awk -F'|' -v target="$TARGET_ID" '$1 == target { print $2; exit }')"
+            ;;
+        %*)
+            SESSION_ID="$(tmux display-message -p -t "$TARGET_ID" '#{session_id}' 2>/dev/null || echo "")"
+            ;;
+        *)
+            SESSION_ID="$(tmux display-message -p -t "$TARGET_ID" '#{session_id}' 2>/dev/null || echo "")"
+            ;;
+    esac
+fi
+
+if [ -z "$SESSION_ID" ]; then
+    SESSION_ID="$(tmux display-message -p '#{session_id}' 2>/dev/null || echo "")"
+fi
+
+[ -n "$SESSION_ID" ] || exit 0
 RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
 PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"
 
@@ -636,8 +679,11 @@ tmux set-hook -g after-select-window "run-shell '$ON_WINDOW_SELECT_SCRIPT'; run-
 # NOTE: We intentionally do NOT use after-rename-window hook because the daemon's
 # own rename-window calls would trigger it, locking the daemon out of future updates.
 # Instead, we set @tabby_name_locked directly in each user-facing rename path.
-tmux bind-key , command-prompt -I "#W" "rename-window '%%' ; set-window-option @tabby_name_locked 1 ; run-shell '$SIGNAL_SIDEBAR_SCRIPT' ; run-shell '$REFRESH_STATUS_SCRIPT'"
-tmux set-hook -g after-rename-window "run-shell -b '$SIGNAL_SIDEBAR_SCRIPT \"#{session_id}\"'; run-shell '$REFRESH_STATUS_SCRIPT'"
+chmod +x "$RENAME_WINDOW_SCRIPT"
+tmux bind-key , command-prompt -I "#W" "run-shell '$RENAME_WINDOW_SCRIPT #{window_id} \"%%\"'"
+ON_WINDOW_RENAMED_SCRIPT="$CURRENT_DIR/scripts/on_window_renamed.sh"
+chmod +x "$ON_WINDOW_RENAMED_SCRIPT"
+tmux set-hook -g after-rename-window "run-shell -b '$ON_WINDOW_RENAMED_SCRIPT #{window_id}'"
 
 # Refresh sidebar when pane focus changes
 ON_PANE_SELECT_SCRIPT="$CURRENT_DIR/scripts/on_pane_select.sh"
@@ -646,7 +692,7 @@ chmod +x "$ON_PANE_SELECT_SCRIPT"
 # Combined into a single run-shell to reduce process overhead
 # optimization: pass args to avoid internal tmux calls
 tmux set-hook -g after-select-pane "run-shell -b '$ON_PANE_SELECT_SCRIPT \"#{session_id}\"; $SAVE_LAYOUT_SCRIPT \"#{window_id}\" \"#{window_layout}\"; if [ -x \"$CYCLE_PANE_BIN\" ]; then \"$CYCLE_PANE_BIN\" --dim-only; fi'"
-tmux set-hook -g pane-title-changed "run-shell -b '$SIGNAL_SIDEBAR_SCRIPT \"#{session_id}\"'; run-shell '$REFRESH_STATUS_SCRIPT'"
+tmux set-hook -g pane-title-changed "run-shell -b '$SIGNAL_SIDEBAR_SCRIPT #{session_id}'; run-shell '$REFRESH_STATUS_SCRIPT'"
 # pane-focus-in is redundant/unreliable, using after-select-pane is sufficient
 # tmux set-hook -g pane-focus-in "run-shell '$ON_PANE_SELECT_SCRIPT'; run-shell '$SAVE_LAYOUT_SCRIPT'"
 # Signal sidebar when panes are split, and preserve window name
