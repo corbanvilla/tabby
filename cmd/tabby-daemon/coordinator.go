@@ -5421,8 +5421,6 @@ func (c *Coordinator) generateSidebarHeader(width int, clientID string) (string,
 		fgColor = c.getHeaderTextColorWithFallback("")
 	}
 	bgColor = normalizeTransparentColor(bgColor)
-	versionText := version.Release()
-
 	// Build style
 	headerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(fgColor)).
@@ -5459,12 +5457,6 @@ func (c *Coordinator) generateSidebarHeader(width int, clientID string) (string,
 	if bgColor != "" {
 		rowStyle = rowStyle.Background(lipgloss.Color(bgColor))
 	}
-	versionStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(c.getInactiveTextColorWithFallback("")))
-	if bgColor != "" {
-		versionStyle = versionStyle.Background(lipgloss.Color(bgColor))
-	}
-
 	// Determine which row gets the text (vertical centering)
 	textRow := 0
 	if centered && headerHeight > 1 {
@@ -5474,40 +5466,6 @@ func (c *Coordinator) generateSidebarHeader(width int, clientID string) (string,
 	// Render header rows
 	for line := 0; line < headerHeight; line++ {
 		if line == textRow {
-			if headerHeight == 1 && versionText != "" {
-				badgeWidth := uniseg.StringWidth(versionText)
-				nameBudget := width - badgeWidth - 2
-				if nameBudget < 1 {
-					nameBudget = 1
-				}
-				if nameWidth > nameBudget {
-					truncated := ""
-					w := 0
-					for _, r := range headerText {
-						rw := runewidth.RuneWidth(r)
-						if w+rw > nameBudget-1 {
-							break
-						}
-						truncated += string(r)
-						w += rw
-					}
-					headerText = truncated + "~"
-					nameWidth = uniseg.StringWidth(headerText)
-				}
-				spacerWidth := width - badgeWidth - nameWidth - 2
-				if spacerWidth < 0 {
-					spacerWidth = 0
-				}
-				s.WriteString(
-					rowStyle.Render(" ") +
-						versionStyle.Render(versionText) +
-						rowStyle.Render(" ") +
-						headerStyle.Render(headerText) +
-						rowStyle.Render(strings.Repeat(" ", spacerWidth)) +
-						"\n",
-				)
-				continue
-			}
 			if centered {
 				// Horizontal centering
 				leftPad := (width - nameWidth) / 2
@@ -5527,22 +5485,6 @@ func (c *Coordinator) generateSidebarHeader(width int, clientID string) (string,
 				}
 				s.WriteString(rowStyle.Render(" ") + headerStyle.Render(headerText) + rowStyle.Render(strings.Repeat(" ", spacerWidth)) + "\n")
 			}
-		} else if line == 0 && versionText != "" {
-			badgeWidth := uniseg.StringWidth(versionText)
-			if badgeWidth > width-1 {
-				badgeWidth = width - 1
-				versionText = runewidth.Truncate(versionText, badgeWidth, "")
-			}
-			spacerWidth := width - badgeWidth - 1
-			if spacerWidth < 0 {
-				spacerWidth = 0
-			}
-			s.WriteString(
-				rowStyle.Render(" ") +
-					versionStyle.Render(versionText) +
-					rowStyle.Render(strings.Repeat(" ", spacerWidth)) +
-					"\n",
-			)
 		} else {
 			s.WriteString(rowStyle.Render(strings.Repeat(" ", width)) + "\n")
 		}
@@ -7082,6 +7024,14 @@ func (c *Coordinator) renderClockWidget(width int) string {
 			datePadding = 0
 		}
 		result.WriteString(style.Render(strings.Repeat(" ", datePadding)+dateStr) + "\n")
+	}
+
+	if releaseText := version.Release(); releaseText != "" {
+		versionPadding := (width - lipgloss.Width(releaseText)) / 2
+		if versionPadding < 0 {
+			versionPadding = 0
+		}
+		result.WriteString(style.Render(strings.Repeat(" ", versionPadding)+releaseText) + "\n")
 	}
 
 	for i := 0; i < clock.PaddingBot; i++ {
@@ -10169,11 +10119,18 @@ func (c *Coordinator) showWindowContextMenu(clientID string, windowTarget string
 	}, pos.args()...)
 
 	// Rename option - locks the name so syncWindowNames won't overwrite it
-	renameCmd := fmt.Sprintf("command-prompt -I '%s' \"rename-window -t :%d -- '%%%%' ; set-window-option -t :%d @tabby_name_locked 1\"", win.Name, win.Index, win.Index)
+	signalSidebarScript := c.getScriptPath("signal_sidebar.sh")
+	refreshChain := ""
+	if signalSidebarScript != "" {
+		refreshChain = fmt.Sprintf(" ; run-shell '%s %s' ; refresh-client -S", signalSidebarScript, c.sessionID)
+	} else {
+		refreshChain = " ; refresh-client -S"
+	}
+	renameCmd := fmt.Sprintf("command-prompt -I '%s' \"rename-window -t :%d -- '%%%%' ; set-window-option -t :%d @tabby_name_locked 1%s\"", win.Name, win.Index, win.Index, refreshChain)
 	args = append(args, "Rename", "r", renameCmd)
 
 	// Unlock name option - allows syncWindowNames to auto-update from pane title
-	unlockCmd := fmt.Sprintf("set-window-option -t :%d -u @tabby_name_locked", win.Index)
+	unlockCmd := fmt.Sprintf("set-window-option -t :%d -u @tabby_name_locked%s", win.Index, refreshChain)
 	args = append(args, "Unlock Name", "u", unlockCmd)
 
 	// Separator before group/appearance section
@@ -10428,11 +10385,18 @@ func (c *Coordinator) showPaneContextMenu(clientID string, paneID string, pos me
 	if currentTitle == "" {
 		currentTitle = pane.Command
 	}
-	renameCmd := fmt.Sprintf("command-prompt -I '%s' -p 'Pane name:' \"set-option -p -t %s @tabby_pane_title '%%%%'\"", currentTitle, pane.ID)
+	signalSidebarScript := c.getScriptPath("signal_sidebar.sh")
+	paneRefreshChain := ""
+	if signalSidebarScript != "" {
+		paneRefreshChain = fmt.Sprintf(" ; run-shell '%s %s' ; refresh-client -S", signalSidebarScript, c.sessionID)
+	} else {
+		paneRefreshChain = " ; refresh-client -S"
+	}
+	renameCmd := fmt.Sprintf("command-prompt -I '%s' -p 'Pane name:' \"set-option -p -t %s @tabby_pane_title '%%%%' ; select-pane -t %s -T '%%%%'%s\"", currentTitle, pane.ID, pane.ID, paneRefreshChain)
 	args = append(args, "Rename", "r", renameCmd)
 
 	// Unlock name option
-	unlockCmd := fmt.Sprintf("set-option -p -t %s -u @tabby_pane_title ; select-pane -t %s -T ''", pane.ID, pane.ID)
+	unlockCmd := fmt.Sprintf("set-option -p -t %s -u @tabby_pane_title ; select-pane -t %s -T ''%s", pane.ID, pane.ID, paneRefreshChain)
 	args = append(args, "Unlock Name", "u", unlockCmd)
 
 	// For header clients, -t targets the header pane (for positioning), so #{pane_current_path}

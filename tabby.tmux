@@ -59,9 +59,10 @@ _TABBY_PRESTART_SESSION=$(tmux display-message -p '#{session_id}' 2>/dev/null ||
 _TABBY_PRESTART_MODE=$(tmux show-options -gqv @tabby_sidebar 2>/dev/null || echo "")
 # Pre-start only when Tabby should actually be active.
 if [ -n "$_TABBY_PRESTART_SESSION" ] && { [ "$_TABBY_PRESTART_MODE" = "enabled" ] || { [ -z "$_TABBY_PRESTART_MODE" ] && [ "$TABBY_AUTO_START" = "1" ]; }; }; then
-    _TABBY_PRESTART_SOCK="/tmp/tabby-daemon-${_TABBY_PRESTART_SESSION}.sock"
-    _TABBY_PRESTART_PIDF="/tmp/tabby-daemon-${_TABBY_PRESTART_SESSION}.pid"
-    _TABBY_PRESTART_WD="/tmp/tabby-daemon-${_TABBY_PRESTART_SESSION}.watchdog.pid"
+    _TABBY_RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
+    _TABBY_PRESTART_SOCK="/tmp/${_TABBY_RUNTIME_PREFIX}tabby-daemon-${_TABBY_PRESTART_SESSION}.sock"
+    _TABBY_PRESTART_PIDF="/tmp/${_TABBY_RUNTIME_PREFIX}tabby-daemon-${_TABBY_PRESTART_SESSION}.pid"
+    _TABBY_PRESTART_WD="/tmp/${_TABBY_RUNTIME_PREFIX}tabby-daemon-${_TABBY_PRESTART_SESSION}.watchdog.pid"
     _TABBY_DAEMON_ALIVE=false
     if [ -S "$_TABBY_PRESTART_SOCK" ] && [ -f "$_TABBY_PRESTART_PIDF" ]; then
         _TPID=$(cat "$_TABBY_PRESTART_PIDF" 2>/dev/null || echo "")
@@ -553,7 +554,8 @@ source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "$CURRENT_DIR"
 
 SESSION_ID="${1:-$(tmux display-message -p '#{session_id}')}"
-PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
+RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
+PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"
 
 if [ -f "$PID_FILE" ]; then
     kill -USR1 "$(cat "$PID_FILE")" 2>/dev/null || true
@@ -635,6 +637,7 @@ tmux set-hook -g after-select-window "run-shell '$ON_WINDOW_SELECT_SCRIPT'; run-
 # own rename-window calls would trigger it, locking the daemon out of future updates.
 # Instead, we set @tabby_name_locked directly in each user-facing rename path.
 tmux bind-key , command-prompt -I "#W" "rename-window '%%' ; set-window-option @tabby_name_locked 1 ; run-shell '$SIGNAL_SIDEBAR_SCRIPT' ; run-shell '$REFRESH_STATUS_SCRIPT'"
+tmux set-hook -g after-rename-window "run-shell -b '$SIGNAL_SIDEBAR_SCRIPT \"#{session_id}\"'; run-shell '$REFRESH_STATUS_SCRIPT'"
 
 # Refresh sidebar when pane focus changes
 ON_PANE_SELECT_SCRIPT="$CURRENT_DIR/scripts/on_pane_select.sh"
@@ -643,6 +646,7 @@ chmod +x "$ON_PANE_SELECT_SCRIPT"
 # Combined into a single run-shell to reduce process overhead
 # optimization: pass args to avoid internal tmux calls
 tmux set-hook -g after-select-pane "run-shell -b '$ON_PANE_SELECT_SCRIPT \"#{session_id}\"; $SAVE_LAYOUT_SCRIPT \"#{window_id}\" \"#{window_layout}\"; if [ -x \"$CYCLE_PANE_BIN\" ]; then \"$CYCLE_PANE_BIN\" --dim-only; fi'"
+tmux set-hook -g pane-title-changed "run-shell -b '$SIGNAL_SIDEBAR_SCRIPT \"#{session_id}\"'; run-shell '$REFRESH_STATUS_SCRIPT'"
 # pane-focus-in is redundant/unreliable, using after-select-pane is sufficient
 # tmux set-hook -g pane-focus-in "run-shell '$ON_PANE_SELECT_SCRIPT'; run-shell '$SAVE_LAYOUT_SCRIPT'"
 # Signal sidebar when panes are split, and preserve window name
@@ -703,8 +707,15 @@ if [ -z "$EXISTING_RESTORE_PATH" ] || echo "$EXISTING_RESTORE_PATH" | grep -Eq "
 fi
 
 RESURRECT_SAVE_KEYS=$(tmux show-option -gqv @resurrect-save 2>/dev/null || echo "C-s")
+TABBY_RESURRECT_SAVE_QUIET=$(tmux show-option -gqv @tabby_resurrect_save_quiet 2>/dev/null || echo "on")
+RESURRECT_SAVE_BIND_CMD="$RESURRECT_SAVE_WRAPPER"
+case "$TABBY_RESURRECT_SAVE_QUIET" in
+    ""|1|on|true|yes)
+        RESURRECT_SAVE_BIND_CMD="$RESURRECT_SAVE_WRAPPER quiet"
+        ;;
+esac
 for RESURRECT_SAVE_KEY in $RESURRECT_SAVE_KEYS; do
-    tmux bind-key "$RESURRECT_SAVE_KEY" run-shell "$RESURRECT_SAVE_WRAPPER"
+    tmux bind-key "$RESURRECT_SAVE_KEY" run-shell "$RESURRECT_SAVE_BIND_CMD"
 done
 
 RESURRECT_RESTORE_KEYS=$(tmux show-option -gqv @resurrect-restore 2>/dev/null || echo "C-r")

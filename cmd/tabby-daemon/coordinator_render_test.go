@@ -157,14 +157,14 @@ func TestGenerateSidebarHeader_WithTitle(t *testing.T) {
 	assert.Contains(t, content, "MY SIDEBAR")
 }
 
-func TestGenerateSidebarHeader_ShowsReleaseVersionBadge(t *testing.T) {
+func TestGenerateSidebarHeader_DoesNotShowReleaseVersion(t *testing.T) {
 	prev := version.Version
 	version.Version = "v9.9.9-dirty"
 	defer func() { version.Version = prev }()
 
 	c := newRenderCoordinator(t)
 	content, _ := c.generateSidebarHeader(30, "test-client")
-	assert.Contains(t, content, "v9.9.9")
+	assert.NotContains(t, content, "v9.9.9")
 	assert.NotContains(t, content, "v9.9.9-dirty")
 }
 
@@ -312,6 +312,19 @@ func TestRenderClockWidget_CustomFormat(t *testing.T) {
 	c.config.Widgets.Clock.Format = "15:04"
 	result := c.renderClockWidget(30)
 	assert.NotEmpty(t, result)
+}
+
+func TestRenderClockWidget_ShowsReleaseBelowDate(t *testing.T) {
+	prev := version.Version
+	version.Version = "v9.9.9-dirty"
+	defer func() { version.Version = prev }()
+
+	c := newRenderCoordinator(t)
+	c.config.Widgets.Clock.Enabled = true
+	c.config.Widgets.Clock.ShowDate = true
+	result := c.renderClockWidget(30)
+	assert.Contains(t, result, "v9.9.9")
+	assert.NotContains(t, result, "v9.9.9-dirty")
 }
 
 func TestRenderGitWidget_NotARepo(t *testing.T) {

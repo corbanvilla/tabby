@@ -8,6 +8,13 @@
 
 set -euo pipefail
 
+AUTOSAVE_ENABLED="$(tmux show-option -gqv @tabby_resurrect_autosave 2>/dev/null || true)"
+case "${AUTOSAVE_ENABLED:-on}" in
+    0|off|false|no)
+        exit 0
+        ;;
+esac
+
 SAVE_SCRIPT="$(tmux show-option -gqv @resurrect-save-script-path 2>/dev/null || true)"
 [ -n "$SAVE_SCRIPT" ] || SAVE_SCRIPT="$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh"
 [ -x "$SAVE_SCRIPT" ] || exit 0
