@@ -28,6 +28,9 @@ func main() {
 	if sessionID == "" {
 		sessionID = readSessionID()
 	}
+	if sessionID != "" {
+		sessionID = canonicalSessionID(sessionID)
+	}
 	if sessionID == "" {
 		fmt.Fprintln(os.Stderr, "new-window: failed to determine session ID")
 		os.Exit(1)
@@ -75,6 +78,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "new-window: failed to create window: %v\n", err)
 		os.Exit(1)
 	}
+	switchTarget := windowSwitchTarget(newWindowID, sessionID)
 
 	if group != "" && group != "Default" {
 		if _, err := runTmuxOutput("set-window-option", "-t", newWindowID, "@tabby_group", group); err != nil {
@@ -146,13 +150,13 @@ func main() {
 
 	clientTTY := strings.TrimSpace(*flagClientTTY)
 	if clientTTY != "" {
-		if _, err := runTmuxOutput("switch-client", "-c", clientTTY, "-t", newWindowID); err != nil {
-			debugLog("switch-client failed for %s via %s: %v", newWindowID, clientTTY, err)
+		if _, err := runTmuxOutput("switch-client", "-c", clientTTY, "-t", switchTarget); err != nil {
+			debugLog("switch-client failed for %s via %s: %v", switchTarget, clientTTY, err)
 		}
 		debugLog("switch-client completed")
 	} else {
-		if _, err := runTmuxOutput("select-window", "-t", newWindowID); err != nil {
-			debugLog("select-window failed for %s: %v", newWindowID, err)
+		if _, err := runTmuxOutput("select-window", "-t", switchTarget); err != nil {
+			debugLog("select-window failed for %s: %v", switchTarget, err)
 		}
 		debugLog("select-window completed")
 	}
@@ -205,6 +209,34 @@ func readTmuxOptionInt(name string) int {
 
 func readSessionID() string {
 	return runTmuxTrimmedOrEmpty("display-message", "-p", "#{session_id}")
+}
+
+func canonicalSessionID(sessionTarget string) string {
+	sessionTarget = strings.TrimSpace(sessionTarget)
+	if sessionTarget == "" {
+		return ""
+	}
+	if out := runTmuxTrimmedOrEmpty("display-message", "-p", "-t", sessionTarget+":", "#{session_id}"); out != "" {
+		return out
+	}
+	if out := runTmuxTrimmedOrEmpty("display-message", "-p", "-t", sessionTarget, "#{session_id}"); out != "" {
+		return out
+	}
+	return sessionTarget
+}
+
+func windowSwitchTarget(windowID, fallbackSessionID string) string {
+	windowID = strings.TrimSpace(windowID)
+	if windowID == "" {
+		return fallbackSessionID + ":"
+	}
+	if out := runTmuxTrimmedOrEmpty("display-message", "-p", "-t", windowID, "#{session_id}:#{window_index}"); out != "" {
+		return out
+	}
+	if fallbackSessionID == "" {
+		return windowID
+	}
+	return fallbackSessionID + ":"
 }
 
 func readTmuxDisplayForClient(clientTTY, format string) string {

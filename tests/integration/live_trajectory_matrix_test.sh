@@ -77,6 +77,12 @@ session_has_sidebar() {
   tmx list-panes -s -t "$session" -F "#{pane_current_command}|#{pane_start_command}" 2>/dev/null | grep -Eq "(sidebar-renderer|sidebar)"
 }
 
+window_name_present() {
+  local session="$1"
+  local expected="$2"
+  tmx list-windows -t "$session" -F "#{window_name}" 2>/dev/null | grep -qx "$expected"
+}
+
 enable_sidebar_for_session() {
   local session="$1"
   local attempt
@@ -145,7 +151,7 @@ assert_true "trajectory 3 previous win2 write preserved" pane_contains "$win2_pa
 
 # Trajectory 4: rename window and verify.
 tmx rename-window -t "$win2" "traj-2-renamed"
-assert_true "trajectory 4 rename reflected" bash -lc "tmux -L '$SOCKET' -f /dev/null list-windows -t '$SESSION_MAIN' -F '#{window_name}' | grep -qx 'traj-2-renamed'"
+assert_true "trajectory 4 rename reflected" wait_for 20 window_name_present "$SESSION_MAIN" "traj-2-renamed"
 
 # Trajectory 5: split pane, write in new pane, and verify both panes.
 base_main_pane="$(content_pane_for_window "$SESSION_MAIN:0")"

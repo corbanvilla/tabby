@@ -11,11 +11,13 @@ if [ -z "$NEW_ID" ]; then
     exit 0
 fi
 
+SWITCH_TARGET="$(tmux display-message -p -t "$NEW_ID" "#{session_id}:#{window_index}" 2>/dev/null || echo "$NEW_ID")"
+
 focus_window() {
     if [ -n "$CLIENT_TTY" ]; then
-        tmux switch-client -c "$CLIENT_TTY" -t "$NEW_ID" 2>/dev/null || true
+        tmux switch-client -c "$CLIENT_TTY" -t "$SWITCH_TARGET" 2>/dev/null || true
     else
-        tmux select-window -t "$NEW_ID" 2>/dev/null || true
+        tmux select-window -t "$SWITCH_TARGET" 2>/dev/null || true
     fi
 }
 

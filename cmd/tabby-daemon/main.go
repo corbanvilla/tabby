@@ -1489,9 +1489,10 @@ func shouldRestoreFocus() bool {
 		strings.Contains(cmd, "pane-header")
 }
 
-// syncClientSizesFromTmux updates all client widths/heights from actual tmux pane sizes
-// This ensures background sidebars get correct dimensions on resize events
-func syncClientSizesFromTmux(server *daemon.Server) {
+// syncClientSizesFromTmux updates all client widths/heights from actual tmux pane sizes.
+// This ensures background sidebars and the coordinator's width-sync state both see the
+// current tmux dimensions after drag resizes and terminal resizes.
+func syncClientSizesFromTmux(server *daemon.Server, coordinator *Coordinator) {
 	// Get all panes with their sizes and commands
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
 		"#{window_id}\x1f#{pane_id}\x1f#{pane_width}\x1f#{pane_height}\x1f#{pane_current_command}").Output()
@@ -1522,13 +1523,18 @@ func syncClientSizesFromTmux(server *daemon.Server) {
 		}
 	}
 
-	// Update server client sizes
+	// Update server client sizes and coordinator width tracking from tmux.
 	for windowID, size := range sidebarSizes {
 		// Skip clearly invalid widths (e.g. pane collapsed to 0 or 1)
 		if size.width < 5 {
 			continue
 		}
 		server.UpdateClientSize(windowID, size.width, size.height)
+		if coordinator != nil {
+			coordinator.clientWidthsMu.Lock()
+			coordinator.clientWidths[windowID] = size.width
+			coordinator.clientWidthsMu.Unlock()
+		}
 	}
 }
 
@@ -1937,7 +1943,7 @@ func main() {
 
 					updateActiveWindow()
 					// Sync client sizes first (only clears hash if sizes changed)
-					syncClientSizesFromTmux(server)
+					syncClientSizesFromTmux(server, coordinator)
 
 					// Optimistic render: flip the active window flag and render
 					// immediately so the sidebar highlights the correct window
@@ -1986,7 +1992,7 @@ func main() {
 						// Second broadcast only if structure changed (new/removed renderers)
 						structureChanged := spawnedRenderer || currentHash != lastWindowsHash
 						if structureChanged {
-							syncClientSizesFromTmux(server)
+							syncClientSizesFromTmux(server, coordinator)
 							server.BroadcastRender()
 						}
 						lastWindowsHash = currentHash

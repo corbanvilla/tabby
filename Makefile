@@ -101,9 +101,12 @@ test-live: build
 	@bash $(TEST_DIR)/integration/live_header_singleton_resilience_test.sh
 	@bash $(TEST_DIR)/integration/live_pane_bell_mock_app_test.sh
 	@bash $(TEST_DIR)/integration/live_sidebar_singleton_names_test.sh
+	@bash $(TEST_DIR)/integration/sidebar_width_sync_test.sh
+	@bash $(TEST_DIR)/integration/terminal_resize_convergence_test.sh
 	@bash $(TEST_DIR)/integration/sidebar_refresh_hooks_test.sh
 	@bash $(TEST_DIR)/integration/live_toggle_concurrency_test.sh
 	@bash $(TEST_DIR)/integration/live_trajectory_matrix_test.sh
+	@bash $(TEST_DIR)/integration/live_resize_trajectory_stress_test.sh
 	@bash $(TEST_DIR)/integration/live_seeded_fuzz_trajectory_test.sh
 	@bash $(TEST_DIR)/integration/resurrect_integration_test.sh
 	@bash $(TEST_DIR)/integration/resurrect_autosave_integration_test.sh

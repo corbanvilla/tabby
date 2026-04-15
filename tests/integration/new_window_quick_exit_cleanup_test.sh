@@ -165,6 +165,20 @@ client_window_is_one_of() {
   [ "$current" = "$first" ] || [ "$current" = "$second" ]
 }
 
+client_window_is_not() {
+  local unexpected="$1"
+  local current
+  current="$(client_window_id)"
+  [ -n "$current" ] && [ "$current" != "$unexpected" ]
+}
+
+return_client_to_base_window() {
+  local target="$1"
+  local tty="$2"
+  tmx switch-client -c "$tty" -t "$target" >/dev/null 2>&1 || true
+  client_window_is "$base_window_id"
+}
+
 client_tty() {
   tmx list-clients -F "#{session_name}|#{client_tty}" 2>/dev/null | awk -F'|' -v s="$SESSION" '$1 == s { print $2; exit }'
 }
@@ -224,8 +238,7 @@ if [ -z "$base_window_id" ] || [ -z "$fallback_window_id" ] || [ -z "$client_tty
 fi
 
 for attempt in $(seq 1 10); do
-  tmx switch-client -t "$SESSION:0"
-  if ! wait_for 30 client_window_is "$base_window_id"; then
+  if ! wait_for 50 return_client_to_base_window "$SESSION:0" "$client_tty_value"; then
     echo "✗ failed to return client to base window on attempt $attempt"
     dump_state
     exit 1
@@ -239,6 +252,12 @@ for attempt in $(seq 1 10); do
 
   if ! wait_for 20 window_count_is $((before_count + 1)); then
     echo "✗ new-window did not create a third window on attempt $attempt"
+    dump_state
+    exit 1
+  fi
+
+  if ! wait_for 20 client_window_is_not "$base_window_id"; then
+    echo "✗ client did not land in the newly created window on attempt $attempt"
     dump_state
     exit 1
   fi
