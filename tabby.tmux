@@ -723,68 +723,140 @@ tmux set-hook -g session-created "run-shell '$ENSURE_SIDEBAR_SCRIPT \"#{session_
 # (daemon's RunWidthSync handles all resize logic via USR1 signal)
 tmux set-hook -g client-resized "run-shell '$SIGNAL_SIDEBAR_SCRIPT'; run-shell '$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\"'; run-shell '$STATUS_GUARD_SCRIPT \"#{session_id}\"'"
 
-# tmux-resurrect integration (options are inert if resurrect is not installed)
+tabby_truthy() {
+    case "$1" in
+        ""|1|on|true|yes) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+tabby_unset_option_if_matches() {
+    local option_name="$1"
+    local pattern="$2"
+    local current_value
+
+    current_value=$(tmux show-option -gqv "$option_name" 2>/dev/null || echo "")
+    if [ -n "$current_value" ] && echo "$current_value" | grep -Eq "$pattern"; then
+        tmux set-option -gu "$option_name" 2>/dev/null || true
+    fi
+}
+
+tabby_unbind_prefix_key_if_matches() {
+    local key="$1"
+    local pattern="$2"
+    local existing_binding
+
+    existing_binding=$(tmux list-keys -T prefix 2>/dev/null | grep -F " $key " | grep -E "$pattern" || true)
+    if [ -n "$existing_binding" ]; then
+        tmux unbind-key "$key" 2>/dev/null || true
+    fi
+}
+
+tabby_remove_resurrect_process() {
+    local process_name="$1"
+    local existing_processes
+    local cleaned_processes
+
+    existing_processes=$(tmux show-option -gqv @resurrect-processes 2>/dev/null || echo "")
+    if [ -z "$existing_processes" ]; then
+        return 0
+    fi
+
+    cleaned_processes=$(printf '%s\n' "$existing_processes" | sed "s#\"~$process_name\"##g; s/[[:space:]][[:space:]]*/ /g; s/^ //; s/ \$//")
+    if [ "$cleaned_processes" = "$existing_processes" ]; then
+        return 0
+    fi
+
+    if [ -n "$cleaned_processes" ]; then
+        tmux set-option -g @resurrect-processes "$cleaned_processes"
+    else
+        tmux set-option -gu @resurrect-processes 2>/dev/null || true
+    fi
+}
+
+# tmux-resurrect integration is opt-in.
+TABBY_RESURRECT_ENABLED=$(tmux show-option -gqv @tabby_resurrect 2>/dev/null || true)
+[ -n "$TABBY_RESURRECT_ENABLED" ] || TABBY_RESURRECT_ENABLED="off"
 RESURRECT_SAVE_HOOK="$CURRENT_DIR/scripts/resurrect_save_hook.sh"
 RESURRECT_RESTORE_HOOK="$CURRENT_DIR/scripts/resurrect_restore_hook.sh"
 RESURRECT_SAVE_WRAPPER="$CURRENT_DIR/scripts/resurrect_save.sh"
 RESURRECT_RESTORE_WRAPPER="$CURRENT_DIR/scripts/resurrect_restore.sh"
 RESUME_CODEX_SCRIPT="$CURRENT_DIR/scripts/resume_codex_session.sh"
 RESUME_CLAUDE_SCRIPT="$CURRENT_DIR/scripts/resume_claude_session.sh"
-chmod +x "$RESURRECT_SAVE_HOOK" "$RESURRECT_RESTORE_HOOK" "$RESURRECT_SAVE_WRAPPER" "$RESURRECT_RESTORE_WRAPPER" "$RESUME_CODEX_SCRIPT" "$RESUME_CLAUDE_SCRIPT"
 
-EXISTING_SAVE_HOOK=$(tmux show-option -gqv @resurrect-hook-post-save-layout 2>/dev/null || echo "")
-if [ -z "$EXISTING_SAVE_HOOK" ] || echo "$EXISTING_SAVE_HOOK" | grep -q "tabby"; then
-    tmux set-option -g @resurrect-hook-post-save-layout "$RESURRECT_SAVE_HOOK"
-fi
+if tabby_truthy "$TABBY_RESURRECT_ENABLED"; then
+    chmod +x "$RESURRECT_SAVE_HOOK" "$RESURRECT_RESTORE_HOOK" "$RESURRECT_SAVE_WRAPPER" "$RESURRECT_RESTORE_WRAPPER" "$RESUME_CODEX_SCRIPT" "$RESUME_CLAUDE_SCRIPT"
 
-EXISTING_RESTORE_HOOK=$(tmux show-option -gqv @resurrect-hook-post-restore-all 2>/dev/null || echo "")
-if [ -z "$EXISTING_RESTORE_HOOK" ] || echo "$EXISTING_RESTORE_HOOK" | grep -q "tabby"; then
-    tmux set-option -g @resurrect-hook-post-restore-all "$RESURRECT_RESTORE_HOOK"
-fi
+    EXISTING_SAVE_HOOK=$(tmux show-option -gqv @resurrect-hook-post-save-layout 2>/dev/null || echo "")
+    if [ -z "$EXISTING_SAVE_HOOK" ] || echo "$EXISTING_SAVE_HOOK" | grep -q "tabby"; then
+        tmux set-option -g @resurrect-hook-post-save-layout "$RESURRECT_SAVE_HOOK"
+    fi
 
-EXISTING_SAVE_PATH=$(tmux show-option -gqv @resurrect-save-script-path 2>/dev/null || echo "")
-if [ -z "$EXISTING_SAVE_PATH" ] || echo "$EXISTING_SAVE_PATH" | grep -Eq "tmux-resurrect|tabby"; then
-    tmux set-option -g @resurrect-save-script-path "$RESURRECT_SAVE_WRAPPER"
-fi
+    EXISTING_RESTORE_HOOK=$(tmux show-option -gqv @resurrect-hook-post-restore-all 2>/dev/null || echo "")
+    if [ -z "$EXISTING_RESTORE_HOOK" ] || echo "$EXISTING_RESTORE_HOOK" | grep -q "tabby"; then
+        tmux set-option -g @resurrect-hook-post-restore-all "$RESURRECT_RESTORE_HOOK"
+    fi
 
-EXISTING_RESTORE_PATH=$(tmux show-option -gqv @resurrect-restore-script-path 2>/dev/null || echo "")
-if [ -z "$EXISTING_RESTORE_PATH" ] || echo "$EXISTING_RESTORE_PATH" | grep -Eq "tmux-resurrect|tabby"; then
-    tmux set-option -g @resurrect-restore-script-path "$RESURRECT_RESTORE_WRAPPER"
-fi
+    EXISTING_SAVE_PATH=$(tmux show-option -gqv @resurrect-save-script-path 2>/dev/null || echo "")
+    if [ -z "$EXISTING_SAVE_PATH" ] || echo "$EXISTING_SAVE_PATH" | grep -Eq "tmux-resurrect|tabby"; then
+        tmux set-option -g @resurrect-save-script-path "$RESURRECT_SAVE_WRAPPER"
+    fi
 
-RESURRECT_SAVE_KEYS=$(tmux show-option -gqv @resurrect-save 2>/dev/null || echo "C-s")
-TABBY_RESURRECT_SAVE_QUIET=$(tmux show-option -gqv @tabby_resurrect_save_quiet 2>/dev/null || echo "on")
-RESURRECT_SAVE_BIND_CMD="$RESURRECT_SAVE_WRAPPER"
-case "$TABBY_RESURRECT_SAVE_QUIET" in
-    ""|1|on|true|yes)
+    EXISTING_RESTORE_PATH=$(tmux show-option -gqv @resurrect-restore-script-path 2>/dev/null || echo "")
+    if [ -z "$EXISTING_RESTORE_PATH" ] || echo "$EXISTING_RESTORE_PATH" | grep -Eq "tmux-resurrect|tabby"; then
+        tmux set-option -g @resurrect-restore-script-path "$RESURRECT_RESTORE_WRAPPER"
+    fi
+
+    RESURRECT_SAVE_KEYS=$(tmux show-option -gqv @resurrect-save 2>/dev/null || echo "C-s")
+    TABBY_RESURRECT_SAVE_QUIET=$(tmux show-option -gqv @tabby_resurrect_save_quiet 2>/dev/null || echo "on")
+    RESURRECT_SAVE_BIND_CMD="$RESURRECT_SAVE_WRAPPER"
+    if tabby_truthy "$TABBY_RESURRECT_SAVE_QUIET"; then
         RESURRECT_SAVE_BIND_CMD="$RESURRECT_SAVE_WRAPPER quiet"
-        ;;
-esac
-for RESURRECT_SAVE_KEY in $RESURRECT_SAVE_KEYS; do
-    tmux bind-key "$RESURRECT_SAVE_KEY" run-shell "$RESURRECT_SAVE_BIND_CMD"
-done
+    fi
+    for RESURRECT_SAVE_KEY in $RESURRECT_SAVE_KEYS; do
+        tmux bind-key "$RESURRECT_SAVE_KEY" run-shell "$RESURRECT_SAVE_BIND_CMD"
+    done
 
-RESURRECT_RESTORE_KEYS=$(tmux show-option -gqv @resurrect-restore 2>/dev/null || echo "C-r")
-for RESURRECT_RESTORE_KEY in $RESURRECT_RESTORE_KEYS; do
-    tmux bind-key "$RESURRECT_RESTORE_KEY" run-shell "$RESURRECT_RESTORE_WRAPPER"
-done
+    RESURRECT_RESTORE_KEYS=$(tmux show-option -gqv @resurrect-restore 2>/dev/null || echo "C-r")
+    for RESURRECT_RESTORE_KEY in $RESURRECT_RESTORE_KEYS; do
+        tmux bind-key "$RESURRECT_RESTORE_KEY" run-shell "$RESURRECT_RESTORE_WRAPPER"
+    done
 
-EXISTING_RESURRECT_PROCS=$(tmux show-option -gqv @resurrect-processes 2>/dev/null || echo "")
-TABBY_RESURRECT_PROCS="$EXISTING_RESURRECT_PROCS"
-case "$TABBY_RESURRECT_PROCS" in
-    *resume_codex_session.sh*) ;;
-    *)
-        TABBY_RESURRECT_PROCS="${TABBY_RESURRECT_PROCS:+$TABBY_RESURRECT_PROCS }\"~resume_codex_session.sh\""
-        ;;
-esac
-case "$TABBY_RESURRECT_PROCS" in
-    *resume_claude_session.sh*) ;;
-    *)
-        TABBY_RESURRECT_PROCS="${TABBY_RESURRECT_PROCS:+$TABBY_RESURRECT_PROCS }\"~resume_claude_session.sh\""
-        ;;
-esac
-if [ "$TABBY_RESURRECT_PROCS" != "$EXISTING_RESURRECT_PROCS" ]; then
-    tmux set-option -g @resurrect-processes "$TABBY_RESURRECT_PROCS"
+    EXISTING_RESURRECT_PROCS=$(tmux show-option -gqv @resurrect-processes 2>/dev/null || echo "")
+    TABBY_RESURRECT_PROCS="$EXISTING_RESURRECT_PROCS"
+    case "$TABBY_RESURRECT_PROCS" in
+        *resume_codex_session.sh*) ;;
+        *)
+            TABBY_RESURRECT_PROCS="${TABBY_RESURRECT_PROCS:+$TABBY_RESURRECT_PROCS }\"~resume_codex_session.sh\""
+            ;;
+    esac
+    case "$TABBY_RESURRECT_PROCS" in
+        *resume_claude_session.sh*) ;;
+        *)
+            TABBY_RESURRECT_PROCS="${TABBY_RESURRECT_PROCS:+$TABBY_RESURRECT_PROCS }\"~resume_claude_session.sh\""
+            ;;
+    esac
+    if [ "$TABBY_RESURRECT_PROCS" != "$EXISTING_RESURRECT_PROCS" ]; then
+        tmux set-option -g @resurrect-processes "$TABBY_RESURRECT_PROCS"
+    fi
+else
+    RESURRECT_SAVE_KEYS=$(tmux show-option -gqv @resurrect-save 2>/dev/null || echo "C-s")
+    RESURRECT_RESTORE_KEYS=$(tmux show-option -gqv @resurrect-restore 2>/dev/null || echo "C-r")
+
+    tabby_unset_option_if_matches @resurrect-hook-post-save-layout 'resurrect_save_hook\.sh'
+    tabby_unset_option_if_matches @resurrect-hook-post-restore-all 'resurrect_restore_hook\.sh'
+    tabby_unset_option_if_matches @resurrect-save-script-path 'resurrect_save\.sh'
+    tabby_unset_option_if_matches @resurrect-restore-script-path 'resurrect_restore\.sh'
+
+    for RESURRECT_SAVE_KEY in $RESURRECT_SAVE_KEYS; do
+        tabby_unbind_prefix_key_if_matches "$RESURRECT_SAVE_KEY" 'resurrect_save\.sh'
+    done
+    for RESURRECT_RESTORE_KEY in $RESURRECT_RESTORE_KEYS; do
+        tabby_unbind_prefix_key_if_matches "$RESURRECT_RESTORE_KEY" 'resurrect_restore\.sh'
+    done
+
+    tabby_remove_resurrect_process "resume_codex_session.sh"
+    tabby_remove_resurrect_process "resume_claude_session.sh"
 fi
 
 # Keep tmux native chooser shortcuts available

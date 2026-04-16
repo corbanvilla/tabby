@@ -738,7 +738,7 @@ To avoid duplicate notifications when using custom hooks:
 
 ## Session Persistence (tmux-resurrect)
 
-Tabby integrates with [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect) so your sessions survive tmux server restarts and reboots. When resurrect is installed, Tabby automatically:
+Tabby integrates with [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect), but the integration is disabled by default. When you opt in with `@tabby_resurrect on`, Tabby:
 
 - **On save** (`prefix + Ctrl-s`): Strips Tabby utility panes (sidebar, pane headers) from the save file so they don't create zombie shell panes on restore.
 - **On restore** (`prefix + Ctrl-r`): Cleans stale runtime state, kills leftover processes, and re-initializes the sidebar based on your saved mode.
@@ -750,9 +750,10 @@ Install tmux-resurrect via [TPM](https://github.com/tmux-plugins/tpm):
 ```bash
 # Add to ~/.tmux.conf (before the Tabby plugin line)
 set -g @plugin 'tmux-plugins/tmux-resurrect'
+set -g @tabby_resurrect on
 ```
 
-Then `prefix + I` to install, or `tmux source ~/.tmux.conf` to reload. That's it — Tabby detects resurrect and wires the hooks automatically.
+Then `prefix + I` to install, or `tmux source ~/.tmux.conf` to reload. With `@tabby_resurrect on`, Tabby wires its save and restore wrappers around tmux-resurrect.
 
 ### What Gets Saved and Restored
 
@@ -773,6 +774,7 @@ git clone https://github.com/tmux-plugins/tmux-resurrect ~/.tmux/plugins/tmux-re
 Add to `~/.tmux.conf` (before Tabby's `run-shell` line):
 ```bash
 run-shell ~/.tmux/plugins/tmux-resurrect/resurrect.tmux
+set -g @tabby_resurrect on
 ```
 
 ### Hook Coexistence

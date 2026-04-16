@@ -133,7 +133,48 @@ fi
 
 bash -n "$RESTORE_WRAPPER" 2>/dev/null && pass "Restore wrapper passes syntax check" || fail "Restore wrapper has syntax errors"
 
-# --- Test 5: Hook options are wired in tmux ---
+# --- Test 5: Resurrect integration is disabled by default ---
+
+SAVE_OPT=$(tmux show-option -gqv @resurrect-hook-post-save-layout 2>/dev/null || echo "")
+RESTORE_OPT=$(tmux show-option -gqv @resurrect-hook-post-restore-all 2>/dev/null || echo "")
+SAVE_PATH_OPT=$(tmux show-option -gqv @resurrect-save-script-path 2>/dev/null || echo "")
+RESTORE_PATH_OPT=$(tmux show-option -gqv @resurrect-restore-script-path 2>/dev/null || echo "")
+PROC_OPT=$(tmux show-option -gqv @resurrect-processes 2>/dev/null || echo "")
+
+if [ -z "$SAVE_OPT" ]; then
+    pass "Save hook is not wired by default"
+else
+    fail "Save hook should be disabled by default (got: '$SAVE_OPT')"
+fi
+
+if [ -z "$RESTORE_OPT" ]; then
+    pass "Restore hook is not wired by default"
+else
+    fail "Restore hook should be disabled by default (got: '$RESTORE_OPT')"
+fi
+
+if [ -z "$SAVE_PATH_OPT" ]; then
+    pass "Save wrapper path is not wired by default"
+else
+    fail "Save wrapper path should be disabled by default (got: '$SAVE_PATH_OPT')"
+fi
+
+if [ -z "$RESTORE_PATH_OPT" ]; then
+    pass "Restore wrapper path is not wired by default"
+else
+    fail "Restore wrapper path should be disabled by default (got: '$RESTORE_PATH_OPT')"
+fi
+
+if [ -z "$PROC_OPT" ] || { ! echo "$PROC_OPT" | grep -q "resume_codex_session.sh" && ! echo "$PROC_OPT" | grep -q "resume_claude_session.sh"; }; then
+    pass "Resurrect process list is not modified by default"
+else
+    fail "Resurrect process list should not include Tabby resume helpers by default (got: '$PROC_OPT')"
+fi
+
+# --- Test 6: Hook options wire in when explicitly enabled ---
+
+tmux set-option -g @tabby_resurrect on
+bash "$TABBY_ROOT/tabby.tmux"
 
 SAVE_OPT=$(tmux show-option -gqv @resurrect-hook-post-save-layout 2>/dev/null || echo "")
 RESTORE_OPT=$(tmux show-option -gqv @resurrect-hook-post-restore-all 2>/dev/null || echo "")
@@ -142,36 +183,36 @@ RESTORE_PATH_OPT=$(tmux show-option -gqv @resurrect-restore-script-path 2>/dev/n
 PROC_OPT=$(tmux show-option -gqv @resurrect-processes 2>/dev/null || echo "")
 
 if echo "$SAVE_OPT" | grep -q "resurrect_save_hook"; then
-    pass "Save hook wired in tmux options"
+    pass "Save hook wires in when resurrect is enabled"
 else
-    fail "Save hook not found in @resurrect-hook-post-save-layout (got: '$SAVE_OPT')"
+    fail "Save hook not found in @resurrect-hook-post-save-layout after enabling (got: '$SAVE_OPT')"
 fi
 
 if echo "$RESTORE_OPT" | grep -q "resurrect_restore_hook"; then
-    pass "Restore hook wired in tmux options"
+    pass "Restore hook wires in when resurrect is enabled"
 else
-    fail "Restore hook not found in @resurrect-hook-post-restore-all (got: '$RESTORE_OPT')"
+    fail "Restore hook not found in @resurrect-hook-post-restore-all after enabling (got: '$RESTORE_OPT')"
 fi
 
 if echo "$SAVE_PATH_OPT" | grep -q "resurrect_save.sh"; then
-    pass "Save wrapper wired in tmux options"
+    pass "Save wrapper wires in when resurrect is enabled"
 else
-    fail "Save wrapper not found in @resurrect-save-script-path (got: '$SAVE_PATH_OPT')"
+    fail "Save wrapper not found in @resurrect-save-script-path after enabling (got: '$SAVE_PATH_OPT')"
 fi
 
 if echo "$RESTORE_PATH_OPT" | grep -q "resurrect_restore.sh"; then
-    pass "Restore wrapper wired in tmux options"
+    pass "Restore wrapper wires in when resurrect is enabled"
 else
-    fail "Restore wrapper not found in @resurrect-restore-script-path (got: '$RESTORE_PATH_OPT')"
+    fail "Restore wrapper not found in @resurrect-restore-script-path after enabling (got: '$RESTORE_PATH_OPT')"
 fi
 
 if echo "$PROC_OPT" | grep -q "resume_codex_session.sh" && echo "$PROC_OPT" | grep -q "resume_claude_session.sh"; then
-    pass "Resurrect process list includes agent resume helpers"
+    pass "Resurrect process list includes agent resume helpers when enabled"
 else
-    fail "Resurrect process list missing agent resume helpers (got: '$PROC_OPT')"
+    fail "Resurrect process list missing agent resume helpers after enabling (got: '$PROC_OPT')"
 fi
 
-# --- Test 6: Save wrapper repairs broken last symlink from same-second collisions ---
+# --- Test 7: Save wrapper repairs broken last symlink from same-second collisions ---
 
 FAKE_RESURRECT_DIR="$(mktemp -d)"
 SAVE_OUTPUT_DIR="$(mktemp -d)"
