@@ -93,6 +93,7 @@ test-e2e: build
 test-live: build
 	@bash $(TEST_DIR)/integration/live_tmux_sessions_test.sh
 	@bash $(TEST_DIR)/integration/live_socket_override_test.sh
+	@bash $(TEST_DIR)/integration/grouped_session_owner_test.sh
 	@bash $(TEST_DIR)/integration/live_multiclient_same_session_test.sh
 	@bash $(TEST_DIR)/integration/window_exit_orphan_cleanup_test.sh
 	@bash $(TEST_DIR)/integration/new_window_quick_exit_cleanup_test.sh

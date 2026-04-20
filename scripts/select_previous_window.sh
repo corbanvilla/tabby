@@ -24,8 +24,8 @@ pick_above_or_next() {
     local idx="$1"
     local best_above_idx=-999999
     local best_above_id=""
-    local best_below_idx=999999
-    local best_below_id=""
+    local best_at_or_below_idx=999999
+    local best_at_or_below_id=""
     local widx wid
     while IFS='|' read -r widx wid; do
         [ -z "$widx" ] && continue
@@ -37,20 +37,24 @@ pick_above_or_next() {
             best_above_idx="$widx"
             best_above_id="$wid"
         fi
-        if [ "$widx" -gt "$idx" ] && [ "$widx" -lt "$best_below_idx" ]; then
-            best_below_idx="$widx"
-            best_below_id="$wid"
+        if [ "$widx" -ge "$idx" ] && [ "$widx" -lt "$best_at_or_below_idx" ]; then
+            best_at_or_below_idx="$widx"
+            best_at_or_below_id="$wid"
         fi
     done <<EOF
 $WINDOW_ROWS
 EOF
 
+    if [ "$idx" -eq 0 ] && [ -n "$best_at_or_below_id" ]; then
+        printf "%s\n" "$best_at_or_below_id"
+        return 0
+    fi
     if [ -n "$best_above_id" ]; then
         printf "%s\n" "$best_above_id"
         return 0
     fi
-    if [ -n "$best_below_id" ]; then
-        printf "%s\n" "$best_below_id"
+    if [ -n "$best_at_or_below_id" ]; then
+        printf "%s\n" "$best_at_or_below_id"
         return 0
     fi
     return 1

@@ -19,7 +19,8 @@ tmux select-window -t visual:0
 
 tmux set-option -g @tabby_test 1
 
-tmux run-shell "$PROJECT_ROOT/tabby.tmux"
+tmux run-shell -b "$PROJECT_ROOT/tabby.tmux"
+sleep 1
 
 tmux run-shell -b "$PROJECT_ROOT/bin/render-status > $SCREENSHOT_DIR/current/horizontal-3-groups.txt"
 

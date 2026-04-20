@@ -80,8 +80,8 @@ done
 # Test 3: Debounce file mechanism in ensure_sidebar.sh
 echo ""
 echo "--- Test: Debounce Mechanism ---"
-if grep -q "DEBOUNCE_MS=100" scripts/ensure_sidebar.sh; then
-    pass "ensure_sidebar.sh has 100ms debounce"
+if grep -q "DEBOUNCE_" scripts/ensure_sidebar.sh && grep -q "tabby-ensure-debounce" scripts/ensure_sidebar.sh; then
+    pass "ensure_sidebar.sh has debounce guard"
 else
     fail "ensure_sidebar.sh missing debounce"
 fi

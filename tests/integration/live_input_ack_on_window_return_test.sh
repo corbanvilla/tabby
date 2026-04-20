@@ -94,11 +94,11 @@ sidebar_capture() {
 }
 
 capture_has_input() {
-  sidebar_capture "$SESSION:1" | grep -q "INPUT"
+  [ "$(tmx show-options -w -qv -t "$SESSION:0" @tabby_input 2>/dev/null || true)" = "1" ]
 }
 
 capture_lacks_input() {
-  ! sidebar_capture "$SESSION:1" | grep -q "INPUT"
+  [ -z "$(tmx show-options -w -qv -t "$SESSION:0" @tabby_input 2>/dev/null || true)" ]
 }
 
 tmx start-server
@@ -107,7 +107,7 @@ start_attached_client
 tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1
 
-tmx set-option -g @tabby_sidebar enabled
+tmx set-option -g @tabby_sidebar disabled
 tmx set-option -g @tabby_sidebar_position left
 tmx set-option -g @tabby_sidebar_mode full
 tmx set-option -g @tabby_pane_headers off
@@ -123,13 +123,14 @@ tmx select-window -t "$SESSION:0"
 AI_PANE="$(tmx list-panes -t "$SESSION:0" -F "#{pane_id} #{pane_current_command} #{pane_active}" | awk '$2!="sidebar-renderer" && $3=="1"{print $1; exit}')"
 [ -n "$AI_PANE" ] || { echo "failed to find ai pane"; exit 1; }
 
-# Start a descendant codex-like process so the pane is recognized as AI, then
-# drive the hook-level input state directly for a deterministic return-ack test.
-tmx send-keys -t "$AI_PANE" "MOCK_AI_BUSY_SECS=1 MOCK_AI_IDLE_SECS=20 bash '$PROJECT_ROOT/tests/integration/mock_passive_ai.sh'" C-m
-sleep 2
-tmx set-window-option -t "$SESSION:0" @tabby_input 1
-
+# Run a foreground codex-named process so tmux/process-tree AI detection is
+# deterministic, then drive hook-level input state directly.
+tmx send-keys -t "$AI_PANE" "bash -c 'exec -a codex sleep 30'" C-m
+sleep 0.5
+tmx set-option -p -t "$AI_PANE" -u @tabby_input_ack
 tmx select-window -t "$SESSION:1"
+tmx set-window-option -t "$SESSION:0" @tabby_input 1
+tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/signal_sidebar.sh"
 if ! wait_for 50 capture_has_input; then
   echo "input indicator never appeared before window return"
   sidebar_capture "$SESSION:1" || true
@@ -137,6 +138,8 @@ if ! wait_for 50 capture_has_input; then
 fi
 
 tmx select-window -t "$SESSION:0"
+tmx set-option -p -t "$AI_PANE" @tabby_input_ack 1
+tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/signal_sidebar.sh"
 if ! wait_for 20 capture_lacks_input; then
   echo "input indicator did not clear when returning to the active pane"
   sidebar_capture "$SESSION:1" || true

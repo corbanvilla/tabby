@@ -4,6 +4,7 @@
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
 source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "$CURRENT_DIR"
+source "$CURRENT_DIR/scripts/_session_owner.sh"
 
 SPAWNING=$(tmux show-option -gqv @tabby_spawning 2>/dev/null || echo "")
 if [ "$SPAWNING" = "1" ]; then
@@ -23,13 +24,17 @@ case "$ACTIVE_CMD $ACTIVE_START" in
         ;;
     *)
         tmux set-option -p @tabby_input_ack 1 2>/dev/null || true
+        tmux set-option -w -u @tabby_input 2>/dev/null || true
         ;;
 esac
 
 # Signal daemon to refresh immediately (daemon handles width sync)
 RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
-DAEMON_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-$(tmux display-message -p '#{session_id}').pid"
-[ -f "$DAEMON_PID_FILE" ] && kill -USR1 "$(cat "$DAEMON_PID_FILE")" 2>/dev/null || true
+SESSION_ID="$(tabby_canonical_session_id "$(tmux display-message -p '#{session_id}' 2>/dev/null || echo "")")"
+if [ -n "$SESSION_ID" ]; then
+    DAEMON_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"
+    [ -f "$DAEMON_PID_FILE" ] && kill -USR1 "$(cat "$DAEMON_PID_FILE")" 2>/dev/null || true
+fi
 
 # Update pane border color if border_from_tab is enabled
 BORDER_FROM_TAB=$(tmux show-option -gqv @tabby_border_from_tab)

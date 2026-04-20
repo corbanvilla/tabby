@@ -5,6 +5,7 @@
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "$CURRENT_DIR"
+source "$CURRENT_DIR/scripts/_session_owner.sh"
 
 # Propagate socket override/runtime hints into tmux session environment so
 # run-shell hooks and spawned panes stay pinned to the intended server.
@@ -57,6 +58,9 @@ fi
 # while we parse config, set options, and wire hooks below.  By the time
 # ensure_sidebar runs (async, at the bottom) the socket should already exist.
 _TABBY_PRESTART_SESSION=$(tmux display-message -p '#{session_id}' 2>/dev/null || echo "")
+if [ -n "$_TABBY_PRESTART_SESSION" ]; then
+    _TABBY_PRESTART_SESSION=$(tabby_canonical_session_id "$_TABBY_PRESTART_SESSION")
+fi
 _TABBY_PRESTART_MODE=$(tmux show-options -gqv @tabby_sidebar 2>/dev/null || echo "")
 # Pre-start only when Tabby should actually be active.
 if [ -n "$_TABBY_PRESTART_SESSION" ] && { [ "$_TABBY_PRESTART_MODE" = "enabled" ] || { [ -z "$_TABBY_PRESTART_MODE" ] && [ "$TABBY_AUTO_START" = "1" ]; }; }; then
@@ -402,14 +406,14 @@ tmux bind-key -T root MouseDown1Pane \
         "send-keys -M -t =" \
         "if-shell -F -t = \"#{m:*pane-header*,#{pane_current_command}}\" \
 		    \"select-pane -t = ; send-keys -M -t =\" \
-            \"select-pane -t = ; send-keys -M -t = ; run-shell -b 'kill -USR1 \$(cat /tmp/tabby-daemon-#{session_id}.pid 2>/dev/null) 2>/dev/null || true'\""
+            \"select-pane -t = ; send-keys -M -t = ; run-shell -b '$CURRENT_DIR/scripts/signal_sidebar.sh #{session_id}'\""
 
 tmux bind-key -T root MouseUp1Pane \
     if-shell -F -t = "#{m:*sidebar-render*,#{pane_current_command}}" \
         "send-keys -M -t =" \
         "if-shell -F -t = \"#{m:*pane-header*,#{pane_current_command}}\" \
 		    \"send-keys -M -t =\" \
-            \"select-pane -t = ; send-keys -M -t = ; run-shell -b 'kill -USR1 \$(cat /tmp/tabby-daemon-#{session_id}.pid 2>/dev/null) 2>/dev/null || true'\""
+            \"select-pane -t = ; send-keys -M -t = ; run-shell -b '$CURRENT_DIR/scripts/signal_sidebar.sh #{session_id}'\""
 
 tmux unbind-key -T root MouseUp3Pane 2>/dev/null || true
 tmux bind-key -T root MouseUp3Pane send-keys -M -t =
@@ -419,11 +423,15 @@ tmux bind-key -T root MouseUp3Pane send-keys -M -t =
 tmux bind-key -T root WheelUpPane \
     if-shell -F -t = "#{m:*sidebar-render*,#{pane_current_command}}" \
         "send-keys -M -t =" \
-        "if-shell -F -t = '#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}' { send-keys -M } { copy-mode -e }"
+        "if-shell -F -t = '#{||:#{pane_in_mode},#{mouse_any_flag}}' { send-keys -M -t = } { copy-mode -e -t = ; send-keys -X -t = -N 3 scroll-up }"
 tmux bind-key -T root WheelDownPane \
     if-shell -F -t = "#{m:*sidebar-render*,#{pane_current_command}}" \
         "send-keys -M -t =" \
-        "if-shell -F -t = '#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}' { send-keys -M } { send-keys -M }"
+        "if-shell -F -t = '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send-keys -M -t =' 'send-keys -M -t ='"
+tmux bind-key -T copy-mode-vi WheelUpPane 'select-pane ; send-keys -X -N 3 scroll-up'
+tmux bind-key -T copy-mode-vi WheelDownPane 'select-pane ; send-keys -X -N 3 scroll-down'
+tmux bind-key -T copy-mode WheelUpPane 'select-pane ; send-keys -X -N 3 scroll-up'
+tmux bind-key -T copy-mode WheelDownPane 'select-pane ; send-keys -X -N 3 scroll-down'
 
 # Enable focus events
 tmux set-option -g focus-events on
@@ -571,6 +579,7 @@ cat > "$SIGNAL_SIDEBAR_SCRIPT" << 'SCRIPT_EOF'
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
 source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "$CURRENT_DIR"
+source "$CURRENT_DIR/scripts/_session_owner.sh"
 
 TARGET_ID="${1:-}"
 SESSION_ID=""
@@ -596,6 +605,8 @@ if [ -z "$SESSION_ID" ]; then
     SESSION_ID="$(tmux display-message -p '#{session_id}' 2>/dev/null || echo "")"
 fi
 
+[ -n "$SESSION_ID" ] || exit 0
+SESSION_ID="$(tabby_canonical_session_id "$SESSION_ID")"
 [ -n "$SESSION_ID" ] || exit 0
 RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
 PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"

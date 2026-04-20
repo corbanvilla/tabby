@@ -309,6 +309,8 @@ func TestPaneIsSystemPane(t *testing.T) {
 
 	falseTests := [][2]string{
 		{"bash", "bash"},
+		{"bash", "bash /home/me/github/tabby/tests/integration/mock_ai_ready_app.sh"},
+		{"codex", "bash /tmp/tabby-worktree/mock_passive_ai.sh"},
 		{"vim", ""},
 		{"git", "git"},
 		{"", ""},

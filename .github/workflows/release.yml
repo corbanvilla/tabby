@@ -56,7 +56,11 @@ jobs:
             bin/pane-header \
             bin/cycle-pane \
             bin/new-window \
-            bin/manage-group
+            bin/manage-group \
+            bin/tmux \
+            scripts \
+            tabby.tmux \
+            config.yaml
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v6

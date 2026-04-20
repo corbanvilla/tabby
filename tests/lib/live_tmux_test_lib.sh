@@ -1,10 +1,28 @@
 #!/usr/bin/env bash
 
 tabby_live_require_tmux() {
-    TABBY_LIVE_TMUX_REAL="${TABBY_LIVE_TMUX_REAL:-$(command -v tmux)}"
+    local candidate wrapper_path wrapper_real candidate_real
+
+    wrapper_path="${PROJECT_ROOT:-}/bin/tmux"
+    wrapper_real=""
+    if [ -n "${PROJECT_ROOT:-}" ] && [ -e "$wrapper_path" ]; then
+        wrapper_real="$(readlink -f "$wrapper_path" 2>/dev/null || echo "$wrapper_path")"
+    fi
+
+    for candidate in "${TABBY_LIVE_TMUX_REAL:-}" /usr/bin/tmux /opt/homebrew/bin/tmux /usr/local/bin/tmux "$(command -v tmux 2>/dev/null || true)"; do
+        [ -n "$candidate" ] || continue
+        [ -x "$candidate" ] || continue
+        candidate_real="$(readlink -f "$candidate" 2>/dev/null || echo "$candidate")"
+        if [ -n "$wrapper_real" ] && [ "$candidate_real" = "$wrapper_real" ]; then
+            continue
+        fi
+        TABBY_LIVE_TMUX_REAL="$candidate"
+        break
+    done
+
     export TABBY_LIVE_TMUX_REAL
     if [ -z "$TABBY_LIVE_TMUX_REAL" ]; then
-        echo "tmux is required for this test"
+        echo "a real tmux binary is required for this test"
         return 1
     fi
 }
@@ -45,7 +63,7 @@ tabby_live_start_attached_client() {
     local pid=$!
     TABBY_LIVE_CLIENT_PIDS="${TABBY_LIVE_CLIENT_PIDS:-} $pid"
     export TABBY_LIVE_CLIENT_PIDS
-    if ! tabby_live_wait_for 30 bash -lc "tmux -L '$TABBY_LIVE_SOCKET' -f /dev/null list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$session'"; then
+    if ! tabby_live_wait_for 30 bash -lc "'$TABBY_LIVE_TMUX_REAL' -L '$TABBY_LIVE_SOCKET' -f /dev/null list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$session'"; then
         echo "failed to attach client for $session"
         [ -f "$log_file" ] && sed -n '1,80p' "$log_file" || true
         return 1

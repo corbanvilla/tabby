@@ -7,6 +7,7 @@
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
 source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "$CURRENT_DIR"
+source "$CURRENT_DIR/scripts/_session_owner.sh"
 
 SPAWNING=$(tmux show-option -gqv @tabby_spawning 2>/dev/null || echo "")
 if [ "$SPAWNING" = "1" ]; then
@@ -33,6 +34,9 @@ if [ -z "$SESSION_ID" ]; then
         exit 0
     fi
 fi
+
+SESSION_ID="$(tabby_canonical_session_id "$SESSION_ID")"
+[ -n "$SESSION_ID" ] || exit 0
 
 RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
 WINDOW_ID="${2:-}"

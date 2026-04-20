@@ -179,6 +179,7 @@ case "$INDICATOR" in
                 if [ -n "$CLAUDE_PANE" ]; then
                     touch "$STATE_DIR/busy-pane-${SESSION}-${CLAUDE_PANE}"
                     [ -n "$SESSION" ] && echo "$CLAUDE_PANE" > "$STATE_DIR/last-pane-${SESSION}"
+                    tmux set-option -p -t "$CLAUDE_PANE" -u @tabby_input_ack 2>/dev/null
                 fi
                 [ -n "$SESSION" ] && echo "$CLAUDE_WIN" > "$STATE_DIR/last-${SESSION}"
                 tmux set-option -t ":$CLAUDE_WIN" -w @tabby_busy 1 2>/dev/null
@@ -246,6 +247,7 @@ case "$INDICATOR" in
             if [ -n "$CLAUDE_WIN" ]; then
                 tmux set-option -t ":$CLAUDE_WIN" -wu @tabby_busy 2>/dev/null
                 tmux set-option -t ":$CLAUDE_WIN" -w @tabby_input 1 2>/dev/null
+                [ -n "$CLAUDE_PANE" ] && tmux set-option -p -t "$CLAUDE_PANE" -u @tabby_input_ack 2>/dev/null
                 [ -n "$SESSION" ] && echo "$CLAUDE_WIN" > "$STATE_DIR/last-${SESSION}"
                 echo "Set input on window $CLAUDE_WIN" >> /tmp/tabby-indicator-debug.log
             fi

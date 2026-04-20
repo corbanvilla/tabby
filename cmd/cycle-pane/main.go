@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -282,12 +283,16 @@ func signalDaemon() {
 	if isSpawning() {
 		return
 	}
+	if script := siblingScript("signal_sidebar.sh"); script != "" {
+		_ = exec.Command(script).Run()
+		return
+	}
 	out, err := exec.Command("tmux", "display-message", "-p", "#{session_id}").Output()
 	if err != nil {
 		return
 	}
 	sessionID := strings.TrimSpace(string(out))
-	data, err := os.ReadFile(fmt.Sprintf("/tmp/tabby-daemon-%s.pid", sessionID))
+	data, err := os.ReadFile(fmt.Sprintf("/tmp/%stabby-daemon-%s.pid", os.Getenv("TABBY_RUNTIME_PREFIX"), sessionID))
 	if err != nil {
 		return
 	}
@@ -298,6 +303,18 @@ func signalDaemon() {
 	if proc, err := os.FindProcess(pid); err == nil {
 		_ = proc.Signal(syscall.SIGUSR1)
 	}
+}
+
+func siblingScript(name string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	path := filepath.Clean(filepath.Join(filepath.Dir(exe), "..", "scripts", name))
+	if st, err := os.Stat(path); err == nil && !st.IsDir() {
+		return path
+	}
+	return ""
 }
 
 // applyBorderDim reads the global pane-active-border-style fg color and sets

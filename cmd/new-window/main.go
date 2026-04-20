@@ -336,7 +336,12 @@ func focusFirstContentPane(windowID string) {
 }
 
 func signalDaemonUSR1(sessionID string) {
-	pidFile := fmt.Sprintf("/tmp/tabby-daemon-%s.pid", sessionID)
+	if script := siblingScript("signal_sidebar.sh"); script != "" {
+		if err := exec.Command(script, sessionID).Run(); err == nil {
+			return
+		}
+	}
+	pidFile := fmt.Sprintf("/tmp/%stabby-daemon-%s.pid", os.Getenv("TABBY_RUNTIME_PREFIX"), sessionID)
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
 		debugLog("daemon pid file not found: %s (%v)", pidFile, err)
@@ -355,6 +360,18 @@ func signalDaemonUSR1(sessionID string) {
 	if err := proc.Signal(syscall.SIGUSR1); err != nil {
 		debugLog("failed sending SIGUSR1 to pid %d: %v", pid, err)
 	}
+}
+
+func siblingScript(name string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	path := filepath.Clean(filepath.Join(filepath.Dir(exe), "..", "scripts", name))
+	if st, err := os.Stat(path); err == nil && !st.IsDir() {
+		return path
+	}
+	return ""
 }
 
 func sendWinchToContentPanes(windowID string) {

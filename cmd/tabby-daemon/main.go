@@ -625,10 +625,15 @@ func cleanupOrphanedSidebars(windows []tmux.Window) {
 }
 
 func paneIsSystemPane(cmd string, startCmd string) bool {
-	return strings.Contains(cmd, "sidebar") || strings.Contains(cmd, "renderer") ||
-		strings.Contains(cmd, "tabby") || strings.Contains(cmd, "pane-header") ||
-		strings.Contains(startCmd, "sidebar") || strings.Contains(startCmd, "renderer") ||
-		strings.Contains(startCmd, "tabby") || strings.Contains(startCmd, "pane-header")
+	return paneCommandLooksSystem(cmd) || paneCommandLooksSystem(startCmd)
+}
+
+func paneCommandLooksSystem(cmd string) bool {
+	lower := strings.ToLower(cmd)
+	return strings.Contains(lower, "sidebar") ||
+		strings.Contains(lower, "renderer") ||
+		strings.Contains(lower, "pane-header") ||
+		strings.Contains(lower, "tabby-daemon")
 }
 
 var orphanWindowFirstSeen = map[string]time.Time{}

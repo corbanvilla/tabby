@@ -7,7 +7,10 @@ set -eu
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && cd .. >/dev/null 2>&1 && pwd)"
 source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "$CURRENT_DIR"
+source "$CURRENT_DIR/scripts/_session_owner.sh"
 SESSION_ID=$(tmux display-message -p '#{session_id}')
+SESSION_ID="$(tabby_canonical_session_id "$SESSION_ID")"
+[ -n "$SESSION_ID" ] || exit 0
 RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
 SIDEBAR_STATE_FILE="/tmp/${RUNTIME_PREFIX}tabby-sidebar-${SESSION_ID}.state"
 DAEMON_SOCK="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.sock"

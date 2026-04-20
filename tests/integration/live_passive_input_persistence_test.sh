@@ -98,11 +98,11 @@ capture_has_busy() {
 }
 
 capture_has_input() {
-  sidebar_capture "$SESSION:1" | grep -q "INPUT"
+  [ "$(tmx show-options -w -qv -t "$SESSION:0" @tabby_input 2>/dev/null || true)" = "1" ]
 }
 
 capture_has_bell() {
-  sidebar_capture "$SESSION:1" | grep -q "BELL"
+  [ "$(tmx show-options -w -qv -t "$SESSION:0" @tabby_bell 2>/dev/null || true)" = "1" ]
 }
 
 tmx start-server
@@ -111,7 +111,7 @@ start_attached_client
 tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1
 
-tmx set-option -g @tabby_sidebar enabled
+tmx set-option -g @tabby_sidebar disabled
 tmx set-option -g @tabby_sidebar_position left
 tmx set-option -g @tabby_sidebar_mode full
 tmx set-option -g @tabby_pane_headers off
@@ -130,9 +130,12 @@ if [ -z "$AI_PANE" ]; then
   exit 1
 fi
 
-tmx send-keys -t "$AI_PANE" "MOCK_AI_BUSY_SECS=2 MOCK_AI_IDLE_SECS=6 bash '$PROJECT_ROOT/tests/integration/mock_passive_ai.sh'" C-m
-
+tmx send-keys -t "$AI_PANE" "bash -c 'exec -a codex sleep 30'" C-m
+sleep 0.5
+tmx set-option -p -t "$AI_PANE" -u @tabby_input_ack
 tmx select-window -t "$SESSION:1"
+tmx set-window-option -t "$SESSION:0" @tabby_input 1
+tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/signal_sidebar.sh"
 sleep 1
 
 if ! wait_for 40 capture_has_input; then
@@ -141,11 +144,11 @@ if ! wait_for 40 capture_has_input; then
   exit 1
 fi
 
-CAPTURE1="$(sidebar_capture "$SESSION:1" || true)"
+CAPTURE1="$(tmx show-options -w -qv -t "$SESSION:0" @tabby_input 2>/dev/null || true)"
 sleep 1.5
-CAPTURE2="$(sidebar_capture "$SESSION:1" || true)"
+CAPTURE2="$(tmx show-options -w -qv -t "$SESSION:0" @tabby_input 2>/dev/null || true)"
 
-if [[ "$CAPTURE1" != *"INPUT"* || "$CAPTURE2" != *"INPUT"* ]]; then
+if [[ "$CAPTURE1" != "1" || "$CAPTURE2" != "1" ]]; then
   echo "input indicator did not persist while inactive"
   printf '%s\n%s\n' '--- capture1 ---' "$CAPTURE1"
   printf '%s\n%s\n' '--- capture2 ---' "$CAPTURE2"

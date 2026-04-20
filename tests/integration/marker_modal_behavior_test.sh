@@ -20,7 +20,7 @@ else
     exit 1
 fi
 
-if grep -q "-Set Group Marker" "$COORDINATOR" && grep -q "-Set Marker" "$COORDINATOR"; then
+if grep -q -- "Set Group Marker" "$COORDINATOR" && grep -q -- "Set Marker" "$COORDINATOR"; then
     echo "✓ Window and group marker menus are present"
 else
     echo "✗ Missing window/group marker menu entries"

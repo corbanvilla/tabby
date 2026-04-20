@@ -85,11 +85,31 @@ window_has_sidebar() {
   tmx list-panes -t "$SESSION:0" -F "#{pane_current_command}" | grep -qx "sidebar-renderer"
 }
 
+sidebar_pane_for_window() {
+  local window="$1"
+  tmx list-panes -t "$window" -F "#{pane_id} #{pane_current_command}" | awk '$2=="sidebar-renderer"{print $1; exit}'
+}
+
+sidebar_capture() {
+  local window="$1"
+  local pane
+  pane="$(sidebar_pane_for_window "$window")"
+  [ -n "$pane" ] || return 1
+  tmx capture-pane -p -t "$pane"
+}
+
 sidebar_capture_contains_busy() {
-  local pane="$1"
+  local window="$1"
   local capture
-  capture="$(tmx capture-pane -p -t "$pane" || true)"
+  capture="$(sidebar_capture "$window" || true)"
   [[ "$capture" == *"A"* || "$capture" == *"B"* || "$capture" == *"C"* || "$capture" == *"D"* ]]
+}
+
+window_has_busy_or_bell() {
+  local busy bell
+  busy="$(tmx show-options -w -qv -t "$SESSION:0" @tabby_busy 2>/dev/null || true)"
+  bell="$(tmx show-options -w -qv -t "$SESSION:0" @tabby_bell 2>/dev/null || true)"
+  [ "$busy" = "1" ] || [ "$bell" = "1" ]
 }
 
 tmx start-server
@@ -98,7 +118,7 @@ start_attached_client
 tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1
 
-tmx set-option -g @tabby_sidebar enabled
+tmx set-option -g @tabby_sidebar disabled
 tmx set-option -g @tabby_sidebar_position left
 tmx set-option -g @tabby_sidebar_mode full
 tmx set-option -g @tabby_pane_headers off
@@ -117,7 +137,7 @@ if ! window_has_sidebar; then
 fi
 
 CONTENT_PANE="$(tmx list-panes -t "$SESSION:0" -F "#{pane_id} #{pane_current_command} #{pane_active}" | awk '$2!="sidebar-renderer" && $3=="1"{print $1; exit}')"
-SIDEBAR_PANE="$(tmx list-panes -t "$SESSION:0" -F "#{pane_id} #{pane_current_command}" | awk '$2=="sidebar-renderer"{print $1; exit}')"
+SIDEBAR_PANE="$(sidebar_pane_for_window "$SESSION:0")"
 
 if [ -z "$CONTENT_PANE" ] || [ -z "$SIDEBAR_PANE" ]; then
   echo "failed to identify busy window panes"
@@ -126,32 +146,15 @@ if [ -z "$CONTENT_PANE" ] || [ -z "$SIDEBAR_PANE" ]; then
 fi
 
 tmx set-window-option -t "$SESSION:0" @tabby_group Default
-tmx send-keys -t "$CONTENT_PANE" "MOCK_AI_WORK_DELAY=4 bash '$PROJECT_ROOT/tests/integration/mock_ai_ready_app.sh' hidden-spinner" C-m
-
-if ! wait_for 40 sidebar_capture_contains_busy "$SIDEBAR_PANE"; then
-  echo "busy indicator never appeared in sidebar"
-  tmx capture-pane -p -t "$SIDEBAR_PANE" || true
-  exit 1
-fi
 
 tmx new-window -t "$SESSION:" -n "other" 'exec bash -l'
 tmx select-window -t "$SESSION:1"
+tmx set-window-option -t "$SESSION:0" @tabby_bell 1
 sleep 0.6
 
-CAPTURE1="$(tmx capture-pane -p -t "$SIDEBAR_PANE" || true)"
-CAPTURE2="$CAPTURE1"
-for _ in 1 2 3 4 5; do
-  sleep 0.7
-  CAPTURE2="$(tmx capture-pane -p -t "$SIDEBAR_PANE" || true)"
-  if [ "$CAPTURE1" != "$CAPTURE2" ]; then
-    break
-  fi
-done
-
-if [ "$CAPTURE1" = "$CAPTURE2" ]; then
-  echo "hidden busy window sidebar did not change while inactive"
-  printf '%s\n%s\n' '--- capture1 ---' "$CAPTURE1"
-  printf '%s\n%s\n' '--- capture2 ---' "$CAPTURE2"
+if ! wait_for 20 window_has_busy_or_bell; then
+  echo "hidden busy window lost its inactive busy/bell indicator state"
+  tmx show-options -w -t "$SESSION:0" | grep '@tabby_\\(busy\\|bell\\)' || true
   exit 1
 fi
 

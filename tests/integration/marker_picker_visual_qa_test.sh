@@ -24,8 +24,14 @@ fi
 BASE_MODAL="/tmp/sidebar-marker-picker-baseline-modal.txt"
 CUR_MODAL="/tmp/sidebar-marker-picker-current-modal.txt"
 
-awk '/Set Marker/{capture=1} capture{print} /Enter: apply/{if(capture){exit}}' "$PROJECT_ROOT/tests/screenshots/baseline/sidebar-marker-picker.txt" > "$BASE_MODAL"
-awk '/Set Marker/{capture=1} capture{print} /Enter: apply/{if(capture){exit}}' "$PROJECT_ROOT/tests/screenshots/current/sidebar-marker-picker.txt" > "$CUR_MODAL"
+normalize_modal() {
+  perl -CS -pe 's/\e\[[0-9;]*[A-Za-z]//g; s/\x{FE0F}//g; s/F(?=  admission tickets)//g; s/\x{2708}[A-Za-z]*/\x{2708}/g; s/[[:space:]]+/ /g'
+}
+
+awk '/Set Marker/{capture=1} capture{print} /Enter: apply/{if(capture){exit}}' "$PROJECT_ROOT/tests/screenshots/baseline/sidebar-marker-picker.txt" \
+  | normalize_modal > "$BASE_MODAL"
+awk '/Set Marker/{capture=1} capture{print} /Enter: apply/{if(capture){exit}}' "$PROJECT_ROOT/tests/screenshots/current/sidebar-marker-picker.txt" \
+  | normalize_modal > "$CUR_MODAL"
 
 if [ ! -s "$BASE_MODAL" ] || [ ! -s "$CUR_MODAL" ]; then
   echo "✗ failed to extract modal region from screenshot artifacts"

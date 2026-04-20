@@ -4,6 +4,7 @@ set -eu
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
 source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "$CURRENT_DIR"
+source "$CURRENT_DIR/scripts/_session_owner.sh"
 
 SESSION_ID="${1:-}"
 WINDOW_ID="${2:-}"
@@ -12,6 +13,8 @@ RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
 if [ -z "$SESSION_ID" ]; then
     SESSION_ID=$(tmux display-message -p '#{session_id}' 2>/dev/null || echo "")
 fi
+SESSION_ID="$(tabby_canonical_session_id "$SESSION_ID")"
+[ -n "$SESSION_ID" ] || exit 0
 
 if [ -z "$WINDOW_ID" ]; then
     WINDOW_ID=$(tmux display-message -p '#{window_id}' 2>/dev/null || echo "")
