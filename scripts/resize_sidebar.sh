@@ -5,6 +5,10 @@
 # (which tmux may have compressed to 1-2 columns) and saved that as the
 # desired width. Now it reads the SAVED desired width and enforces it.
 
+CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
+
 if [ "$(tmux show-option -gqv @tabby_spawning 2>/dev/null)" = "1" ]; then
     exit 0
 fi
@@ -93,7 +97,4 @@ done
 
 # Signal daemon to refresh (pick up new dimensions)
 SESSION_ID=$(tmux display-message -p '#{session_id}' 2>/dev/null)
-DAEMON_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
-if [ -f "$DAEMON_PID_FILE" ]; then
-    kill -USR1 "$(cat "$DAEMON_PID_FILE")" 2>/dev/null || true
-fi
+"$CURRENT_DIR/scripts/signal_sidebar.sh" "$SESSION_ID" >/dev/null 2>&1 || true

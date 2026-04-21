@@ -15,6 +15,7 @@ if [ ! -x "$PROJECT_ROOT/bin/tabby-daemon" ] || [ ! -x "$PROJECT_ROOT/bin/sideba
 fi
 
 SOCKET="tabby-live-hidden-busy-$$"
+SOCKET_PATH="/tmp/tmux-$(id -u)/$SOCKET"
 SESSION="live-hidden-busy"
 CLIENT_PID=""
 TEST_HOME="$(mktemp -d)"
@@ -46,7 +47,12 @@ indicators:
 YAML
 
 tmx() {
-  HOME="$TEST_HOME" XDG_CONFIG_HOME="$TEST_XDG" "$tmux_real" -L "$SOCKET" -f /dev/null "$@"
+  env -u TMUX \
+    HOME="$TEST_HOME" \
+    XDG_CONFIG_HOME="$TEST_XDG" \
+    TABBY_TMUX_REAL="$tmux_real" \
+    TABBY_TMUX_SOCKET="$SOCKET_PATH" \
+    "$tmux_real" -L "$SOCKET" -f /dev/null "$@"
 }
 
 wait_for() {
@@ -75,8 +81,9 @@ trap cleanup EXIT
 start_attached_client() {
   local tty_dump="/tmp/tabby-live-hidden-busy-tty-$$.typescript"
   local log_file="/tmp/tabby-live-hidden-busy-client-$$.log"
-  HOME="$TEST_HOME" XDG_CONFIG_HOME="$TEST_XDG" TERM=xterm \
-    script -q -c "TERM=xterm $tmux_real -L $SOCKET -f /dev/null attach-session -t $SESSION" "$tty_dump" >"$log_file" 2>&1 &
+  env -u TMUX HOME="$TEST_HOME" XDG_CONFIG_HOME="$TEST_XDG" TERM=xterm \
+    TABBY_TMUX_REAL="$tmux_real" TABBY_TMUX_SOCKET="$SOCKET_PATH" \
+    script -q -c "env -u TMUX TERM=xterm TABBY_TMUX_REAL='$tmux_real' TABBY_TMUX_SOCKET='$SOCKET_PATH' '$tmux_real' -L '$SOCKET' -f /dev/null attach-session -t '$SESSION'" "$tty_dump" >"$log_file" 2>&1 &
   CLIENT_PID=$!
   wait_for 30 bash -lc "HOME='$TEST_HOME' XDG_CONFIG_HOME='$TEST_XDG' '$tmux_real' -L '$SOCKET' -f /dev/null list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$SESSION'"
 }
@@ -114,6 +121,9 @@ window_has_busy_or_bell() {
 
 tmx start-server
 tmx new-session -d -s "$SESSION" -n "busy" 'exec bash -l'
+tmx set-environment -gu TMUX 2>/dev/null || true
+tmx set-environment -g TABBY_TMUX_REAL "$tmux_real"
+tmx set-environment -g TABBY_TMUX_SOCKET "$SOCKET_PATH"
 start_attached_client
 tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
 sleep 1

@@ -25,7 +25,7 @@ BASE_MODAL="/tmp/sidebar-marker-picker-baseline-modal.txt"
 CUR_MODAL="/tmp/sidebar-marker-picker-current-modal.txt"
 
 normalize_modal() {
-  perl -CS -pe 's/\e\[[0-9;]*[A-Za-z]//g; s/\x{FE0F}//g; s/F(?=  admission tickets)//g; s/\x{2708}[A-Za-z]*/\x{2708}/g; s/[[:space:]]+/ /g'
+  perl -CS -pe 's/\e\[[0-9;]*[A-Za-z]//g; s/\x{FE0F}//g; s/F(?=  admission tickets)//g; s/\x{2708}[\x{2500}-\x{257F}-]*/\x{2708}/g; s/[[:space:]]+/ /g'
 }
 
 awk '/Set Marker/{capture=1} capture{print} /Enter: apply/{if(capture){exit}}' "$PROJECT_ROOT/tests/screenshots/baseline/sidebar-marker-picker.txt" \

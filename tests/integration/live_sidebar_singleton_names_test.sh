@@ -15,16 +15,21 @@ if [ ! -x "$PROJECT_ROOT/bin/tabby-daemon" ] || [ ! -x "$PROJECT_ROOT/bin/sideba
 fi
 
 SOCKET="tabby-live-names-$$"
+SOCKET_PATH="/tmp/tmux-$(id -u)/$SOCKET"
 SESSION="live-names"
 CLIENT_PID=""
 
 tmx() {
-  "$tmux_real" -L "$SOCKET" -f /dev/null "$@"
+  env -u TMUX \
+    TABBY_TMUX_REAL="$tmux_real" \
+    TABBY_TMUX_SOCKET="$SOCKET_PATH" \
+    "$tmux_real" -L "$SOCKET" -f /dev/null "$@"
 }
 
 seed_tabby_tmux_env() {
   local socket_path
   socket_path="$(tmx display-message -p '#{socket_path}')"
+  tmx set-environment -gu TMUX 2>/dev/null || true
   tmx set-environment -g TABBY_TMUX_SOCKET "$socket_path"
   tmx set-environment -g TABBY_TMUX_REAL "$tmux_real"
 }
@@ -73,23 +78,26 @@ sidebar_contains_names() {
 start_attached_client() {
   local tty_dump="/tmp/tabby-live-names-tty-$$.typescript"
   local log_file="/tmp/tabby-live-names-client-$$.log"
-  TERM=xterm script -q -c "TERM=xterm $tmux_real -L $SOCKET -f /dev/null attach-session -t $SESSION" "$tty_dump" >"$log_file" 2>&1 &
+  env -u TMUX TERM=xterm TABBY_TMUX_REAL="$tmux_real" TABBY_TMUX_SOCKET="$SOCKET_PATH" \
+    script -q -c "env -u TMUX TERM=xterm TABBY_TMUX_REAL='$tmux_real' TABBY_TMUX_SOCKET='$SOCKET_PATH' '$tmux_real' -L '$SOCKET' -f /dev/null attach-session -t '$SESSION'" "$tty_dump" >"$log_file" 2>&1 &
   CLIENT_PID=$!
-  wait_for 30 bash -lc "tmux -L '$SOCKET' -f /dev/null list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$SESSION'"
+  wait_for 30 bash -lc "env -u TMUX '$tmux_real' -L '$SOCKET' -f /dev/null list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$SESSION'"
 }
 
 tmx start-server
 tmx new-session -d -s "$SESSION" -n "main"
 seed_tabby_tmux_env
 start_attached_client
-tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
-sleep 1
-
 tmx set-option -g @tabby_sidebar disabled
 tmx set-option -g @tabby_sidebar_position left
 tmx set-option -g @tabby_sidebar_mode full
 tmx set-option -g @tabby_pane_headers off
 tmx set-option -g @tabby_auto_rename off
+tmx set-option -g automatic-rename off
+tmx set-option -g allow-rename off
+tmx run-shell -b "$PROJECT_ROOT/tabby.tmux"
+sleep 1
+
 tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/toggle_sidebar_daemon.sh"
 sleep 1
 tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/ensure_sidebar.sh"

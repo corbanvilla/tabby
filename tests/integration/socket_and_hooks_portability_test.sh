@@ -9,8 +9,12 @@ SOCKET_ENV="$PROJECT_ROOT/scripts/_tmux_socket_env.sh"
 SIGNAL_SCRIPT="$PROJECT_ROOT/scripts/signal_sidebar.sh"
 RESTORE_SCRIPT="$PROJECT_ROOT/scripts/restore_sidebar.sh"
 FOCUS_SCRIPT="$PROJECT_ROOT/scripts/focus_new_window.sh"
+RESIZE_SCRIPT="$PROJECT_ROOT/scripts/resize_sidebar.sh"
+STABILIZE_SCRIPT="$PROJECT_ROOT/scripts/stabilize_client_resize.sh"
 TOGGLE_SCRIPT="$PROJECT_ROOT/scripts/toggle_sidebar.sh"
 TOGGLE_DAEMON_SCRIPT="$PROJECT_ROOT/scripts/toggle_sidebar_daemon.sh"
+WATCHDOG_SCRIPT="$PROJECT_ROOT/scripts/watchdog_daemon.sh"
+NEW_WINDOW_SCRIPT="$PROJECT_ROOT/scripts/new_window_with_group.sh"
 PLUGIN_TMUX="$PROJECT_ROOT/tabby.tmux"
 
 check_bootstrap() {
@@ -42,8 +46,32 @@ fi
 check_bootstrap "$SIGNAL_SCRIPT" "signal_sidebar.sh"
 check_bootstrap "$RESTORE_SCRIPT" "restore_sidebar.sh"
 check_bootstrap "$FOCUS_SCRIPT" "focus_new_window.sh"
+check_bootstrap "$RESIZE_SCRIPT" "resize_sidebar.sh"
+check_bootstrap "$STABILIZE_SCRIPT" "stabilize_client_resize.sh"
 check_bootstrap "$TOGGLE_SCRIPT" "toggle_sidebar.sh"
 check_bootstrap "$TOGGLE_DAEMON_SCRIPT" "toggle_sidebar_daemon.sh"
+check_bootstrap "$NEW_WINDOW_SCRIPT" "new_window_with_group.sh"
+
+if grep -Fq 'CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"' "$NEW_WINDOW_SCRIPT"; then
+  echo "✓ new_window_with_group.sh resolves CURRENT_DIR at runtime"
+else
+  echo "✗ new_window_with_group.sh has a baked-in CURRENT_DIR"
+  exit 1
+fi
+
+if grep -Fq 'CURRENT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"' "$PLUGIN_TMUX"; then
+  echo "✓ tabby.tmux generates new_window_with_group.sh with runtime CURRENT_DIR"
+else
+  echo "✗ tabby.tmux new-window template expands CURRENT_DIR while sourcing"
+  exit 1
+fi
+
+if grep -q 'tmux set-option -g @tabby_daemon_pid "$DAEMON_PID"' "$WATCHDOG_SCRIPT"; then
+  echo "✓ watchdog publishes daemon pid for tmux hooks after every start"
+else
+  echo "✗ watchdog does not refresh @tabby_daemon_pid"
+  exit 1
+fi
 
 if grep -q "\\[ -x \".*cycle-pane\" \\] &&" "$PLUGIN_TMUX" || \
    grep -q "\\[ -x \".*cycle-pane\" \\] &&" "$TOGGLE_DAEMON_SCRIPT"; then

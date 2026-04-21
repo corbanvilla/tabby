@@ -54,7 +54,10 @@ WINDOW_START=$(date +%s)
 while true; do
     rm -f "$SENTINEL"
 
-    "$DAEMON_BIN" "$@"
+    "$DAEMON_BIN" "$@" &
+    DAEMON_PID=$!
+    tmux set-option -g @tabby_daemon_pid "$DAEMON_PID" 2>/dev/null || true
+    wait "$DAEMON_PID"
     EXIT_CODE=$?
 
     # Check if clean shutdown was requested (daemon or toggle script wrote sentinel)

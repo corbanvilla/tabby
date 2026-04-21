@@ -36,6 +36,14 @@ sidebar_width_equals() {
     [ "$(tabby_live_sidebar_width_for_window "$target")" = "$expected" ]
 }
 
+sidebar_width_at_least() {
+    local target="$1"
+    local min_width="$2"
+    local width
+    width="$(tabby_live_sidebar_width_for_window "$target")"
+    [ -n "$width" ] && [ "$width" -ge "$min_width" ]
+}
+
 content_width_at_least() {
     local target="$1"
     local min_width="$2"
@@ -87,7 +95,11 @@ resize_and_assert() {
 }
 
 tabby_live_resize_client "$client_tty" "190x45" "$SESSION:0"
-sleep 0.5
+if ! tabby_live_wait_for 40 sidebar_width_at_least "$SESSION:0" "15"; then
+    echo "✗ failed to capture stable initial desktop sidebar width"
+    tabby_live_tmx list-panes -t "$SESSION:0" -F "#{pane_id}|#{pane_width}|#{pane_current_command}|#{pane_start_command}" || true
+    exit 1
+fi
 desktop_width="$(tabby_live_sidebar_width_for_window "$SESSION:0")"
 if [ -z "$desktop_width" ]; then
     echo "✗ failed to capture initial desktop sidebar width"

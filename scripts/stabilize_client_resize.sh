@@ -2,6 +2,8 @@
 set -eu
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
 
 SESSION_ID="${1:-}"
 WINDOW_ID="${2:-}"
@@ -25,6 +27,7 @@ fi
 for delay in 0.05 0.20 0.45 0.90; do
     sleep "$delay"
     "$CURRENT_DIR/scripts/ensure_sidebar.sh" "$SESSION_ID" "$WINDOW_ID" >/dev/null 2>&1 || true
+    "$CURRENT_DIR/scripts/resize_sidebar.sh" >/dev/null 2>&1 || true
     "$CURRENT_DIR/scripts/signal_sidebar.sh" >/dev/null 2>&1 || true
     tmux refresh-client -S 2>/dev/null || true
 done

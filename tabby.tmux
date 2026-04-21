@@ -120,7 +120,7 @@ cat > "$NEW_WINDOW_SCRIPT" << SCRIPT_EOF
 set -u
 
 CLIENT_TTY="\${1:-}"
-CURRENT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
+CURRENT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
 source "\$CURRENT_DIR/scripts/_tmux_socket_env.sh"
 tabby_init_tmux_socket_env "\$CURRENT_DIR"
 

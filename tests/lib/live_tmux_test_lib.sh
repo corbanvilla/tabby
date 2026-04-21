@@ -28,12 +28,13 @@ tabby_live_require_tmux() {
 }
 
 tabby_live_tmx() {
-    "$TABBY_LIVE_TMUX_REAL" -L "$TABBY_LIVE_SOCKET" -f /dev/null "$@"
+    env -u TMUX "$TABBY_LIVE_TMUX_REAL" -L "$TABBY_LIVE_SOCKET" -f /dev/null "$@"
 }
 
 tabby_live_seed_env() {
     local socket_path
     socket_path="$(tabby_live_tmx display-message -p '#{socket_path}')"
+    tabby_live_tmx set-environment -gu TMUX 2>/dev/null || true
     tabby_live_tmx set-environment -g TABBY_TMUX_SOCKET "$socket_path"
     tabby_live_tmx set-environment -g TABBY_TMUX_REAL "$TABBY_LIVE_TMUX_REAL"
     export TABBY_TMUX_SOCKET="$socket_path"
@@ -59,11 +60,12 @@ tabby_live_start_attached_client() {
     local label="$2"
     local tty_dump="/tmp/tabby-live-${label}-tty-$$.typescript"
     local log_file="/tmp/tabby-live-${label}-client-$$.log"
-    TERM=xterm script -q -c "TERM=xterm $TABBY_LIVE_TMUX_REAL -L $TABBY_LIVE_SOCKET -f /dev/null attach-session -t $session" "$tty_dump" >"$log_file" 2>&1 &
+    env -u TMUX TERM=xterm TABBY_TMUX_SOCKET="${TABBY_TMUX_SOCKET:-}" TABBY_TMUX_REAL="$TABBY_LIVE_TMUX_REAL" \
+        script -q -c "env -u TMUX TERM=xterm TABBY_TMUX_SOCKET='${TABBY_TMUX_SOCKET:-}' TABBY_TMUX_REAL='$TABBY_LIVE_TMUX_REAL' '$TABBY_LIVE_TMUX_REAL' -L '$TABBY_LIVE_SOCKET' -f /dev/null attach-session -t '$session'" "$tty_dump" >"$log_file" 2>&1 &
     local pid=$!
     TABBY_LIVE_CLIENT_PIDS="${TABBY_LIVE_CLIENT_PIDS:-} $pid"
     export TABBY_LIVE_CLIENT_PIDS
-    if ! tabby_live_wait_for 30 bash -lc "'$TABBY_LIVE_TMUX_REAL' -L '$TABBY_LIVE_SOCKET' -f /dev/null list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$session'"; then
+    if ! tabby_live_wait_for 30 bash -lc "env -u TMUX '$TABBY_LIVE_TMUX_REAL' -L '$TABBY_LIVE_SOCKET' -f /dev/null list-clients -F '#{session_name}' 2>/dev/null | grep -qx '$session'"; then
         echo "failed to attach client for $session"
         [ -f "$log_file" ] && sed -n '1,80p' "$log_file" || true
         return 1
@@ -115,7 +117,7 @@ tabby_live_enable_sidebar_for_window() {
             return 0
         fi
         if [ -n "$session_id" ]; then
-            TABBY_TMUX_SOCKET="$TABBY_TMUX_SOCKET" TABBY_TMUX_REAL="$TABBY_TMUX_REAL" \
+            env -u TMUX TABBY_TMUX_SOCKET="$TABBY_TMUX_SOCKET" TABBY_TMUX_REAL="$TABBY_TMUX_REAL" \
                 "$PROJECT_ROOT/scripts/signal_sidebar.sh" "$session_id" >/dev/null 2>&1 || true
         fi
         tabby_live_tmx run-shell -b -t "$session:" "$PROJECT_ROOT/scripts/ensure_sidebar.sh _ \"$target\""
@@ -185,6 +187,8 @@ tabby_live_resize_client() {
     local session_id
     session_id="$(tabby_live_tmx display-message -p '#{session_id}')"
     tabby_live_tmx resize-window -t "$target" -x "$width" -y "$height"
-    "$PROJECT_ROOT/scripts/stabilize_client_resize.sh" "$session_id" "$target" >/dev/null 2>&1 || true
-    "$PROJECT_ROOT/scripts/signal_sidebar.sh" "$session_id" >/dev/null 2>&1 || true
+    env -u TMUX TABBY_TMUX_SOCKET="$TABBY_TMUX_SOCKET" TABBY_TMUX_REAL="$TABBY_TMUX_REAL" \
+        "$PROJECT_ROOT/scripts/stabilize_client_resize.sh" "$session_id" "$target" >/dev/null 2>&1 || true
+    env -u TMUX TABBY_TMUX_SOCKET="$TABBY_TMUX_SOCKET" TABBY_TMUX_REAL="$TABBY_TMUX_REAL" \
+        "$PROJECT_ROOT/scripts/signal_sidebar.sh" "$session_id" >/dev/null 2>&1 || true
 }
