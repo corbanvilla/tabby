@@ -56,7 +56,7 @@ export TABBY_CLAUDE_PROJECTS_DIR="$CLAUDE_PROJECTS"
 
 tmux new-session -d -s "$TEST_SESSION" -n codex -c "$CODEX_DIR"
 tmux new-window -t "$TEST_SESSION:" -n claude -c "$CLAUDE_DIR"
-tmux send-keys -t "$TEST_SESSION:codex" "node $TEST_BIN/codex.js --no-alt-screen strategy-probe" C-m
+tmux send-keys -t "$TEST_SESSION:codex" "node $TEST_BIN/codex.js strategy-probe" C-m
 tmux send-keys -t "$TEST_SESSION:claude" "$TEST_BIN/claude strategy-probe" C-m
 sleep 1
 

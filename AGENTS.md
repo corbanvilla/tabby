@@ -142,6 +142,11 @@ bash tests/e2e/run_e2e.sh window_close_removes
 ./scripts/dev-status.sh
 ```
 
+When testing Codex behavior, do not use `--no-alt-screen`. Tabby's indicator
+logic must be verified against the default full-screen Codex TUI because the
+non-alt-screen mode can hide redraw and title/CPU state bugs that users see in
+normal tmux panes.
+
 ## Common Issues
 
 1. Runtime is stale after rebuild: run `./scripts/dev-status.sh`, then restart per the sidebar restart command above.

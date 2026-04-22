@@ -628,7 +628,7 @@ func TestProcessAIToolStates_NodeWrappedAIToolBusyIsIsolated(t *testing.T) {
 			100: 0,
 			101: 0,
 			200: 0,
-			201: 0,
+			201: 30,
 		},
 		commByPID: map[int]string{
 			100: "fish",

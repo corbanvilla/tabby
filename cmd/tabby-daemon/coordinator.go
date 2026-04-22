@@ -1995,7 +1995,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			}
 
 			// Signal 3: CPU usage (skip when idle icon present)
-			if !busy && pane.PID > 0 && !hasIdle {
+			if !busy && pane.PID > 0 && !hasIdle && !isNodeWrappedAIPane(pane, pt) {
 				cpuPct := pt.treeCPU(pane.PID)
 				if cpuPct > 5.0 {
 					busy = true
@@ -2229,6 +2229,28 @@ func (pt *processTree) subtreeHasAITool(pid int) bool {
 	return false
 }
 
+func (pt *processTree) subtreeHasNodeWrappedAITool(pid int) bool {
+	if pt == nil || pid <= 0 {
+		return false
+	}
+	visited := make(map[int]bool)
+	queue := []int{pid}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if visited[cur] {
+			continue
+		}
+		visited[cur] = true
+		comm := strings.ToLower(filepath.Base(strings.TrimSpace(pt.commByPID[cur])))
+		if comm == "node" && tmux.IsAIToolCommandLine(pt.commByPID[cur], pt.argsByPID[cur]) {
+			return true
+		}
+		queue = append(queue, pt.children[cur]...)
+	}
+	return false
+}
+
 func isAIPane(pane tmux.Pane, pt *processTree) bool {
 	if tmux.IsAIToolCommandLine(pane.Command, pane.StartCommand) {
 		return true
@@ -2237,6 +2259,16 @@ func isAIPane(pane tmux.Pane, pt *processTree) bool {
 		return true
 	}
 	return false
+}
+
+func isNodeWrappedAIPane(pane *tmux.Pane, pt *processTree) bool {
+	if pane == nil {
+		return false
+	}
+	if strings.EqualFold(filepath.Base(strings.TrimSpace(pane.Command)), "node") && tmux.IsAIToolCommandLine(pane.Command, pane.StartCommand) {
+		return true
+	}
+	return pane.PID > 0 && pt != nil && pt.subtreeHasNodeWrappedAITool(pane.PID)
 }
 
 // computeVisualPositions builds a map of window ID -> visual position in the

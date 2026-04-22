@@ -58,7 +58,7 @@ for i in $(seq 1 6); do
     printf '{"type":"custom-title","sessionId":"claude-stress-%s"}\n' "$i" > "$claude_project_dir/claude-stress-$i.jsonl"
 
     tmux new-window -t "$TEST_SESSION:" -n "codex-$i" -c "$codir"
-    tmux send-keys -t "$TEST_SESSION:codex-$i" "node $TEST_BIN/codex.js --no-alt-screen stress-$i" C-m
+    tmux send-keys -t "$TEST_SESSION:codex-$i" "node $TEST_BIN/codex.js stress-$i" C-m
     tmux new-window -t "$TEST_SESSION:" -n "claude-$i" -c "$cldir"
     tmux send-keys -t "$TEST_SESSION:claude-$i" "$TEST_BIN/claude stress-$i" C-m
 done

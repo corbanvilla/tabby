@@ -118,7 +118,7 @@ tmux set-option -g @resurrect-processes '"~resume_codex_session.sh" "~resume_cla
 SMOKE_NONCE="tabby-smoke-$(date +%s)-$$"
 CLAUDE_PROMPT="Reply with exactly $SMOKE_NONCE and then wait for my next message."
 
-tmux send-keys -t "$TEST_SESSION:codex" "codex --no-alt-screen resume \"$CODEX_SESSION_ID\"" C-m
+tmux send-keys -t "$TEST_SESSION:codex" "codex resume \"$CODEX_SESSION_ID\"" C-m
 tmux send-keys -t "$TEST_SESSION:claude" "claude --dangerously-skip-permissions --tools \"\"" C-m
 
 if ! wait_for 60 codex_started; then

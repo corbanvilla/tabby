@@ -41,9 +41,6 @@ set -euo pipefail
 printf 'codex:%s\n' "$*" >> "${TABBY_AGENT_RESTORE_LOG:?}"
 args=("$@")
 resume_index=0
-if [ "${args[0]:-}" = "--no-alt-screen" ]; then
-    resume_index=1
-fi
 if [ "${args[$resume_index]:-}" = "resume" ]; then
     session_id="${args[$((resume_index + 1))]:-}"
     nonce="$(sqlite3 "${TABBY_CODEX_STATE_DB:?}" "select title from threads where id='$session_id' limit 1;" 2>/dev/null | tr -d '\r')"
@@ -109,7 +106,7 @@ tmux set-environment -g TABBY_CLAUDE_BIN "$TEST_BIN/claude"
 tmux set-environment -g TABBY_AGENT_RESTORE_LOG "$TABBY_AGENT_RESTORE_LOG"
 tmux set-option -g @resurrect-processes '"~resume_codex_session.sh" "~resume_claude_session.sh"'
 
-tmux send-keys -t "$TEST_SESSION:codex" "node $TEST_BIN/codex.js --no-alt-screen restore-probe" C-m
+tmux send-keys -t "$TEST_SESSION:codex" "node $TEST_BIN/codex.js restore-probe" C-m
 tmux send-keys -t "$TEST_SESSION:claude" "$TEST_BIN/claude restore-probe" C-m
 sleep 1
 

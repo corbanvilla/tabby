@@ -252,15 +252,28 @@ claude_available() {
 
 run_codex_smoke() {
     setup_sidebar_session "codex" || return 1
-    local pane nonce prompt prompt_q cmd
+    local pane nonce prompt cmd
     pane="$(content_pane)"
     [ -n "$pane" ] || { echo "✗ failed to find Codex content pane"; return 1; }
     nonce="tabby-codex-spinner-$(date +%s)-$$"
     prompt="Reply with exactly $nonce and no other text."
-    printf -v prompt_q '%q' "$prompt"
-    cmd="codex --no-alt-screen --ask-for-approval never --sandbox read-only $prompt_q"
+    cmd="codex --dangerously-bypass-approvals-and-sandbox"
     tmx send-keys -t "$pane" -l "$cmd"
     tmx send-keys -t "$pane" C-m
+    if ! wait_for 300 bash -lc "'$tmux_real' -S '$SOCKET_PATH' -f /dev/null display-message -p -t '$pane' '#{pane_current_command}' 2>/dev/null | grep -qx node"; then
+        echo "✗ Codex command did not start"
+        tmx capture-pane -p -t "$pane" -S -120 | tail -n 80 || true
+        return 1
+    fi
+    if tmx capture-pane -p -t "$pane" -S -120 2>/dev/null | grep -Fq "Do you trust"; then
+        tmx send-keys -t "$pane" C-m
+    fi
+    if ! wait_for_pane_contains "$pane" "OpenAI Codex"; then
+        echo "✗ Codex prompt did not become ready"
+        tmx capture-pane -p -t "$pane" -S -120 | tail -n 80 || true
+        return 1
+    fi
+    paste_line_to_pane "$pane" "$prompt"
     switch_to_watch_window || { echo "✗ failed to switch away from Codex pane"; return 1; }
     wait_for_busy_then_input "Codex" "$pane"
     if wait_for_pane_contains "$pane" "$nonce"; then
