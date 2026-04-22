@@ -416,7 +416,7 @@ func TestProcessAIToolStates_ClearsStaleBusy(t *testing.T) {
 	c.config.Indicators.Busy.Enabled = false
 	c.config.Indicators.Input.Enabled = false
 	c.windows = []tmux.Window{
-		{ID: "@1", Index: 1, Busy: true, Panes: []tmux.Pane{
+		{ID: "@1", Index: 1, Busy: true, HookBusy: true, Panes: []tmux.Pane{
 			{ID: "%1", Command: "bash"},
 		}},
 	}
@@ -513,7 +513,7 @@ func TestProcessAIToolStates_MultipleWindows(t *testing.T) {
 	c.config.Indicators.Busy.Enabled = false
 	c.config.Indicators.Input.Enabled = false
 	c.windows = []tmux.Window{
-		{ID: "@1", Index: 1, Busy: true, Panes: []tmux.Pane{{ID: "%1", Command: "bash"}}},
+		{ID: "@1", Index: 1, Busy: true, HookBusy: true, Panes: []tmux.Pane{{ID: "%1", Command: "bash"}}},
 		{ID: "@2", Index: 2, Input: true, Panes: []tmux.Pane{{ID: "%2", Command: "zsh"}}},
 	}
 	pending := c.processAIToolStates(nil)
@@ -564,7 +564,7 @@ func TestProcessAIToolStates_BusyClearsInputAck(t *testing.T) {
 	c.config.Indicators.Busy.Enabled = false
 	c.config.Indicators.Input.Enabled = false
 	c.windows = []tmux.Window{
-		{ID: "@1", Index: 1, Busy: true, Panes: []tmux.Pane{
+		{ID: "@1", Index: 1, Busy: true, HookBusy: true, Panes: []tmux.Pane{
 			{ID: "%1", Command: "2.1.17", Title: "⠋ thinking", Active: true, InputAck: true},
 		}},
 	}
@@ -614,6 +614,57 @@ func TestProcessAIToolStates_CodexAndClaudeSpinnerShowsBusy(t *testing.T) {
 	}
 }
 
+func TestProcessAIToolStates_NodeWrappedAIToolBusyIsIsolated(t *testing.T) {
+	tmux.ConfigureBusyDetection(nil, []string{"codex"}, 0)
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = true
+	c.config.Indicators.Input.Enabled = true
+	pt := &processTree{
+		children: map[int][]int{
+			100: []int{101},
+			200: []int{201},
+		},
+		cpuByPID: map[int]float64{
+			100: 0,
+			101: 0,
+			200: 0,
+			201: 0,
+		},
+		commByPID: map[int]string{
+			100: "fish",
+			101: "node",
+			200: "fish",
+			201: "node",
+		},
+		argsByPID: map[int]string{
+			100: "fish",
+			101: "node /home/me/.local/share/pnpm/global/5/.pnpm/@openai/codex/bin/codex.js",
+			200: "fish",
+			201: "node /home/me/.local/share/pnpm/global/5/.pnpm/@openai/codex/bin/codex.js",
+		},
+	}
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Busy: true, Panes: []tmux.Pane{
+			{ID: "%1", Command: "node", PID: 100, Title: "⠋ codex-a", Active: true},
+		}},
+		{ID: "@2", Index: 2, Busy: true, Panes: []tmux.Pane{
+			{ID: "%2", Command: "node", PID: 200, Title: "codex-b", Active: true},
+		}},
+		{ID: "@3", Index: 3, Panes: []tmux.Pane{
+			{ID: "%3", Command: "fish", PID: 300, Title: "fish", Active: true},
+		}},
+	}
+
+	pending := c.processAIToolStates(pt)
+
+	assert.Empty(t, pending)
+	assert.True(t, c.windows[0].Panes[0].AIBusy)
+	assert.True(t, c.windows[0].Busy)
+	assert.False(t, c.windows[1].Panes[0].AIBusy, "generic node busy must not become hook-busy for idle Codex")
+	assert.False(t, c.windows[1].Busy, "idle node-wrapped Codex window should not spin just because pane command is node")
+	assert.False(t, c.windows[2].Busy)
+}
+
 func TestProcessAIToolStates_InputPersistsAcrossRefreshesUntilAck(t *testing.T) {
 	c := newTestCoordinator(t)
 	c.config.Indicators.Busy.Enabled = false
@@ -629,6 +680,80 @@ func TestProcessAIToolStates_InputPersistsAcrossRefreshesUntilAck(t *testing.T) 
 	assert.Empty(t, pending)
 	assert.True(t, c.windows[0].Panes[0].AIInput)
 	assert.True(t, c.windows[0].Input)
+}
+
+func TestProcessAIToolStates_InputAckClearsOnlyViewedWindow(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = true
+	c.config.Indicators.Input.Enabled = true
+	c.aiInputActive["%1"] = true
+	c.aiInputActive["%2"] = true
+
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Active: true, Input: true, Panes: []tmux.Pane{
+			{ID: "%1", Command: "codex", Title: "codex ready", Active: true, InputAck: true},
+		}},
+		{ID: "@2", Index: 2, Active: false, Input: true, Panes: []tmux.Pane{
+			{ID: "%2", Command: "codex", Title: "codex ready", Active: true},
+		}},
+	}
+
+	pending := c.processAIToolStates(&processTree{
+		children: make(map[int][]int),
+		cpuByPID: make(map[int]float64),
+	})
+
+	foundViewedUnset := false
+	for _, p := range pending {
+		if p.windowID == "@1" && p.key == "@tabby_input" && p.unset {
+			foundViewedUnset = true
+			break
+		}
+	}
+	assert.True(t, foundViewedUnset, "viewed window should clear its input flag")
+	assert.False(t, c.windows[0].Panes[0].AIInput)
+	assert.False(t, c.windows[0].Input)
+	assert.True(t, c.windows[1].Panes[0].AIInput, "unviewed window should keep its input marker")
+	assert.True(t, c.windows[1].Input)
+	assert.False(t, c.aiInputActive["%1"])
+	assert.True(t, c.aiInputActive["%2"])
+}
+
+func TestProcessAIToolStates_NewBusyTurnPreservesOtherUnviewedInput(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = true
+	c.config.Indicators.Input.Enabled = true
+	c.aiInputActive["%2"] = true
+
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Active: true, Busy: true, HookBusy: true, Panes: []tmux.Pane{
+			{ID: "%1", Command: "codex", Title: "⠋ thinking", Active: true, InputAck: true},
+		}},
+		{ID: "@2", Index: 2, Active: false, Input: true, Panes: []tmux.Pane{
+			{ID: "%2", Command: "codex", Title: "codex ready", Active: true},
+		}},
+	}
+
+	pending := c.processAIToolStates(&processTree{
+		children: make(map[int][]int),
+		cpuByPID: make(map[int]float64),
+	})
+
+	foundAckUnset := false
+	for _, p := range pending {
+		if p.windowID == "%1" && p.pane && p.key == "@tabby_input_ack" && p.unset {
+			foundAckUnset = true
+			break
+		}
+	}
+	assert.True(t, foundAckUnset, "new busy turn should make viewed pane eligible for a future input marker")
+	assert.True(t, c.windows[0].Panes[0].AIBusy)
+	assert.True(t, c.windows[0].Busy)
+	assert.False(t, c.windows[0].Panes[0].InputAck)
+	assert.True(t, c.windows[1].Panes[0].AIInput, "other unviewed AI pane should stay at input")
+	assert.True(t, c.windows[1].Input)
+	assert.False(t, c.windows[1].Busy)
+	assert.True(t, c.aiInputActive["%2"])
 }
 
 func TestProcessAIToolStates_InputPersistsAcrossPostSpinnerTitleChanges(t *testing.T) {
@@ -679,7 +804,7 @@ func TestProcessAIToolStates_HookBusyClearsToInput(t *testing.T) {
 	}
 
 	c.windows = []tmux.Window{
-		{ID: "@1", Index: 1, Active: true, Busy: true, Panes: []tmux.Pane{
+		{ID: "@1", Index: 1, Active: true, Busy: true, HookBusy: true, Panes: []tmux.Pane{
 			{ID: "%1", Command: "2.1.17", PID: 123, Title: "codex", Active: true},
 		}},
 	}

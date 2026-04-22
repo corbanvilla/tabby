@@ -330,7 +330,8 @@ type Window struct {
 	Bell        bool   // Window has triggered bell
 	Silence     bool   // Window has been silent (monitor-silence)
 	Last        bool   // Window was the last active window
-	Busy        bool   // Window is busy (set via @tabby_busy option by the running process)
+	Busy        bool   // Window is busy (set via @tabby_busy or inferred from non-idle panes)
+	HookBusy    bool   // Window has explicit @tabby_busy set by a hook/tool
 	Input       bool   // Window needs user input (set via @tabby_input option)
 	CustomColor string // User-defined tab color (set via @tabby_color option)
 	Group       string // User-assigned group name (set via @tabby_group option)
@@ -477,6 +478,7 @@ func ListWindows() ([]Window, error) {
 			Silence:     silence,
 			Last:        parts[7] == "1",
 			Busy:        busy,
+			HookBusy:    busy,
 			Input:       input,
 			CustomColor: customColor,
 			Group:       group,

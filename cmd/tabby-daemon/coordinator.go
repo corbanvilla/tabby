@@ -1751,9 +1751,10 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 					}
 					win.Input = false
 				} else {
-					if win.Busy {
+					if win.HookBusy {
 						pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_busy", unset: true})
 						win.Busy = false
+						win.HookBusy = false
 					}
 					win.Bell = false
 					for j := range win.Panes {
@@ -1806,9 +1807,10 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			// Handles cases where the daemon wasn't tracking the AI tool
 			// (e.g., daemon restart, race between hook and exit) but hooks
 			// left indicators set.
-			if win.Busy {
+			if win.HookBusy {
 				pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_busy", unset: true})
 				win.Busy = false
+				win.HookBusy = false
 			}
 			if win.Input {
 				pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_input", unset: true})
@@ -1839,7 +1841,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 		// Hook-based: @tabby_busy is set at window level. When hooks are active,
 		// attribute busy to the pane with a spinner, or first AI pane as fallback.
 		hookBusyPaneID := ""
-		if win.Busy {
+		if win.HookBusy {
 			// Find which pane the hook likely refers to
 			for _, p := range aiPanes {
 				if tmux.HasSpinner(p.Title) {
@@ -1867,7 +1869,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 		}
 
 		// Staleness check for hook-based busy (window-level @tabby_busy)
-		if win.Busy {
+		if win.HookBusy {
 			anySpinner := false
 			for _, p := range aiPanes {
 				if tmux.HasSpinner(p.Title) {
@@ -1886,6 +1888,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 					logEvent("STALE_BUSY_CLEAR pane=%s window=%d idle_secs=%d", stalePID, idx, idleSecs)
 					pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_busy", unset: true})
 					win.Busy = false
+					win.HookBusy = false
 					hookBusyPaneID = ""
 					delete(c.hookPaneBusyIdleAt, stalePID)
 				}
@@ -1904,7 +1907,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			hasIdle := tmux.HasIdleIcon(pane.Title)
 
 			// === Hook-based detection for this pane ===
-			if win.Busy && pid == hookBusyPaneID {
+			if win.HookBusy && pid == hookBusyPaneID {
 				// Hook says this pane is busy
 				c.hookPaneActive[pid] = true
 				if pane.AIBell {
@@ -1954,7 +1957,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 
 			// Hook-active bypass: when hooks previously controlled this pane
 			// and now say idle, trust that unless spinner overrides.
-			if c.hookPaneActive[pid] && !win.Busy && !hasSpinner {
+			if c.hookPaneActive[pid] && !win.HookBusy && !hasSpinner {
 				if c.prevPaneBusy[pid] {
 					coordinatorDebugLog.Printf("[AI] Pane %s (win %d, %s): BUSY -> IDLE (hook)",
 						pid, idx, pane.Command)
