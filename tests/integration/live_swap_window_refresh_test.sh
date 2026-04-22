@@ -90,7 +90,11 @@ wait_for_sidebar_order() {
 }
 
 current_window_name() {
-  tmx display-message -p '#{window_name}'
+  tmx display-message -t "$SESSION:" -p '#{window_name}'
+}
+
+current_window_is_beta() {
+  [ "$(current_window_name)" = "beta" ]
 }
 
 start_attached_client() {
@@ -125,8 +129,8 @@ sleep 1
 tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/ensure_sidebar.sh"
 
 tmx select-window -t "$SESSION:1"
-target_window_id="$(tmx display-message -p '#{window_id}')"
-target_session_id="$(tmx display-message -p '#{session_id}')"
+target_window_id="$(tmx display-message -t "$SESSION:1" -p '#{window_id}')"
+target_session_id="$(tmx display-message -t "$SESSION:1" -p '#{session_id}')"
 "$PROJECT_ROOT/scripts/signal_sidebar.sh" "$target_session_id"
 
 if ! wait_for 40 session_has_sidebar; then
@@ -143,7 +147,7 @@ fi
 
 "$PROJECT_ROOT/scripts/swap_window.sh" :+1 "$target_window_id" "$target_session_id"
 
-if ! wait_for 30 bash -lc "[ \"\$(tmux display-message -p '#{window_name}')\" = 'beta' ]"; then
+if ! wait_for 30 current_window_is_beta; then
   echo "✗ focus did not stay on the original window after swap"
   echo "current=$(current_window_name)"
   exit 1

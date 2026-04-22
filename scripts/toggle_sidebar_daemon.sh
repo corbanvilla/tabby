@@ -240,6 +240,21 @@ if [ "$CURRENT_STATE" = "enabled" ]; then
         tmux kill-pane -t "$pane_id" 2>/dev/null || true
     done < <(tmux list-panes -s -F "#{pane_current_command}|#{pane_id}" 2>/dev/null | grep -E "^(sidebar|sidebar-renderer|tabby-daemon|pane-header)" || true)
 
+    # A daemon can race with shutdown and create one last renderer after the
+    # first pane list is captured. Drain late system panes before returning.
+    for _cleanup_pass in 1 2 3 4 5; do
+        LATE_SYSTEM_PANES=$(tmux list-panes -s -F "#{pane_current_command}|#{pane_id}" 2>/dev/null | grep -E "^(sidebar|sidebar-renderer|tabby-daemon|pane-header)" || true)
+        [ -z "$LATE_SYSTEM_PANES" ] && break
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            pane_id=$(echo "$line" | cut -d'|' -f2)
+            tmux kill-pane -t "$pane_id" 2>/dev/null || true
+        done <<EOF
+$LATE_SYSTEM_PANES
+EOF
+        sleep 0.1
+    done
+
     tmux set -g mouse off 2>/dev/null || true
     sleep 0.1
     tmux set -g mouse on 2>/dev/null || true

@@ -105,6 +105,7 @@ func newTestCoordinator(t *testing.T) *Coordinator {
 		aiInputActive:      make(map[string]bool),
 		hookPaneActive:     make(map[string]bool),
 		hookPaneBusyIdleAt: make(map[string]int64),
+		paneBusyStartedAt:  make(map[string]int64),
 		aiBellUntil:        make(map[string]int64),
 		pendingMenus:       make(map[string][]menuItemDef),
 		lastWindowSelect:   make(map[string]time.Time),
@@ -136,6 +137,7 @@ func TestHelpersSanity(t *testing.T) {
 	assert.NotNil(t, c.aiInputActive)
 	assert.NotNil(t, c.hookPaneActive)
 	assert.NotNil(t, c.hookPaneBusyIdleAt)
+	assert.NotNil(t, c.paneBusyStartedAt)
 	assert.NotNil(t, c.aiBellUntil)
 	assert.NotNil(t, c.pendingMenus)
 	assert.NotNil(t, c.lastWindowSelect)

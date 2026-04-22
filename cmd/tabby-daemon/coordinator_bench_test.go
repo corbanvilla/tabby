@@ -33,6 +33,7 @@ func benchmarkCoordinator() *Coordinator {
 		aiInputActive:      make(map[string]bool),
 		hookPaneActive:     make(map[string]bool),
 		hookPaneBusyIdleAt: make(map[string]int64),
+		paneBusyStartedAt:  make(map[string]int64),
 		aiBellUntil:        make(map[string]int64),
 		pendingMenus:       make(map[string][]menuItemDef),
 		lastWindowSelect:   make(map[string]time.Time),

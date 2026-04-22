@@ -266,6 +266,7 @@ type Coordinator struct {
 	aiInputActive      map[string]bool   // pane ID → waiting-for-input should persist until ack/busy
 	hookPaneActive     map[string]bool   // pane ID → hooks detected (seen @tabby_busy=1)
 	hookPaneBusyIdleAt map[string]int64  // pane ID → unix timestamp when hook-busy but process looks idle
+	paneBusyStartedAt  map[string]int64  // pane ID → unix timestamp when current busy run started
 	aiBellUntil        map[string]int64  // pane ID → unix timestamp when bell expires
 
 	// Callback to sync sidebar client widths in the server's client map
@@ -314,6 +315,25 @@ func (c *Coordinator) GetGlobalWidth() int {
 		return 25 // Default
 	}
 	return c.globalWidth
+}
+
+func readSidebarWidthOption() int {
+	out, err := exec.Command("tmux", "show-option", "-gqv", "@tabby_sidebar_width").Output()
+	if err != nil {
+		return 0
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || width <= 0 {
+		return 0
+	}
+	return width
+}
+
+func (c *Coordinator) refreshGlobalWidthFromOptionLocked() {
+	if width := readSidebarWidthOption(); width >= 10 && width != c.globalWidth {
+		coordinatorDebugLog.Printf("Width sync: tmux option changed global width from %d to %d", c.globalWidth, width)
+		c.globalWidth = width
+	}
 }
 
 func (c *Coordinator) collapseWindowPanes(windowTarget string, win *tmux.Window) {
@@ -740,6 +760,7 @@ func NewCoordinator(sessionID string) *Coordinator {
 		aiBellUntil:        make(map[string]int64),
 		hookPaneActive:     make(map[string]bool),
 		hookPaneBusyIdleAt: make(map[string]int64),
+		paneBusyStartedAt:  make(map[string]int64),
 		lastWidth:          25, // Default width for pet physics
 		pet: petState{
 			Pos:       pos2D{X: 10, Y: 0},
@@ -803,12 +824,10 @@ func NewCoordinator(sessionID string) *Coordinator {
 	c.RefreshSession()
 
 	// Initialize global width from tmux option
-	if out, err := exec.Command("tmux", "show-option", "-gqv", "@tabby_sidebar_width").Output(); err == nil {
-		if w, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil && w > 0 {
-			c.globalWidth = w
-		} else {
-			c.globalWidth = 25 // Default
-		}
+	if w := readSidebarWidthOption(); w > 0 {
+		c.globalWidth = w
+	} else {
+		c.globalWidth = 25 // Default
 	}
 
 	// Read collapse state from tmux option
@@ -1723,6 +1742,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 					delete(c.prevPaneTitle, pid)
 					delete(c.hookPaneActive, pid)
 					delete(c.hookPaneBusyIdleAt, pid)
+					delete(c.paneBusyStartedAt, pid)
 				}
 				if activePaneAcked {
 					pending = append(pending, tmuxSetOption{windowID: win.ID, key: "@tabby_input", unset: true})
@@ -1760,6 +1780,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 					delete(c.aiInputActive, pid)
 					delete(c.hookPaneActive, pid)
 					delete(c.hookPaneBusyIdleAt, pid)
+					delete(c.paneBusyStartedAt, pid)
 				}
 			}
 			if anyPrevAI {
@@ -1901,6 +1922,9 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 						pid, idx, pane.Command)
 				}
 				c.prevPaneBusy[pid] = true
+				if c.paneBusyStartedAt[pid] == 0 {
+					c.paneBusyStartedAt[pid] = now
+				}
 				delete(c.aiBellUntil, pid)
 				pane.AIBell = false
 				c.prevPaneTitle[pid] = pane.Title
@@ -1924,6 +1948,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 				pane.AIBell = false
 				c.prevPaneBusy[pid] = false
 				c.prevPaneTitle[pid] = pane.Title
+				delete(c.paneBusyStartedAt, pid)
 				continue
 			}
 
@@ -1935,11 +1960,17 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 						pid, idx, pane.Command)
 				}
 				pane.AIBusy = false
-				if c.aiInputActive[pid] && !pane.InputAck {
+				if c.prevPaneBusy[pid] && !pane.InputAck {
 					pane.AIInput = true
+					c.aiInputActive[pid] = true
+				} else if c.aiInputActive[pid] && !pane.InputAck {
+					pane.AIInput = true
+				} else if pane.InputAck {
+					delete(c.aiInputActive, pid)
 				}
 				c.prevPaneBusy[pid] = false
 				c.prevPaneTitle[pid] = pane.Title
+				delete(c.paneBusyStartedAt, pid)
 				continue
 			}
 
@@ -1955,7 +1986,8 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			prevTitle, hasPrev := c.prevPaneTitle[pid]
 			hadSpinner := hasPrev && tmux.HasSpinner(prevTitle)
 			spinnerCleared := hadSpinner && !hasSpinner
-			if hasPrev && pane.Title != prevTitle && !spinnerCleared && !hasIdle {
+			inputPending := c.aiInputActive[pid] && !pane.InputAck
+			if hasPrev && pane.Title != prevTitle && !spinnerCleared && !hasIdle && !inputPending {
 				busy = true
 			}
 
@@ -1969,6 +2001,13 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 
 			// State machine
 			wasBusy := c.prevPaneBusy[pid]
+			titleChanged := hasPrev && pane.Title != prevTitle
+			if busy && !hasSpinner && !titleChanged && wasBusy {
+				busyStarted := c.paneBusyStartedAt[pid]
+				if busyStarted > 0 && now-busyStarted >= tmux.AIIdleTimeout() {
+					busy = false
+				}
+			}
 
 			if busy {
 				if pane.AIBell {
@@ -1983,6 +2022,9 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 				pane.AIBell = false
 				delete(c.aiInputActive, pid)
 				c.prevPaneBusy[pid] = true
+				if c.paneBusyStartedAt[pid] == 0 {
+					c.paneBusyStartedAt[pid] = now
+				}
 				delete(c.aiBellUntil, pid)
 				if !wasBusy {
 					coordinatorDebugLog.Printf("[AI] Pane %s (win %d, %s): -> BUSY (spinner=%v titleChanged=%v)",
@@ -2002,6 +2044,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 					delete(c.aiInputActive, pid)
 				}
 				c.prevPaneBusy[pid] = false
+				delete(c.paneBusyStartedAt, pid)
 				coordinatorDebugLog.Printf("[AI] Pane %s (win %d, %s): BUSY -> INPUT (title=%q)",
 					pid, idx, pane.Command, pane.Title)
 			} else if c.aiInputActive[pid] && !pane.InputAck {
@@ -2077,12 +2120,18 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			delete(c.aiInputActive, pid)
 			delete(c.hookPaneActive, pid)
 			delete(c.hookPaneBusyIdleAt, pid)
+			delete(c.paneBusyStartedAt, pid)
 			delete(c.aiBellUntil, pid)
 		}
 	}
 	for pid := range c.prevPaneTitle {
 		if !seenPanes[pid] {
 			delete(c.prevPaneTitle, pid)
+		}
+	}
+	for pid := range c.paneBusyStartedAt {
+		if !seenPanes[pid] {
+			delete(c.paneBusyStartedAt, pid)
 		}
 	}
 	return pending
@@ -3989,6 +4038,7 @@ func (c *Coordinator) handleWidthSync(clientID string, currentWidth int) {
 	if c.globalWidth == 0 {
 		c.globalWidth = currentWidth
 	}
+	c.refreshGlobalWidthFromOptionLocked()
 
 	// If the active window's sidebar was resized by the user, adopt as new global width.
 	// Only reject widths below the absolute minimum (broken state).
@@ -4103,6 +4153,7 @@ func (c *Coordinator) RunWidthSync(activeWindowID string, force bool) {
 
 	trackLock("widthSyncMu", "RunWidthSync")
 	c.widthSyncMu.Lock()
+	c.refreshGlobalWidthFromOptionLocked()
 
 	// Detect active window change
 	justBecameActive := activeWindowID != "" && c.lastActiveWindowID != activeWindowID
