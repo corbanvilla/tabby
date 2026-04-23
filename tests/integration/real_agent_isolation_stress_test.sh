@@ -8,6 +8,8 @@ if [ "${TABBY_RUN_REAL_AGENT_ISOLATION_STRESS:-0}" != "1" ]; then
     exit 0
 fi
 
+MODE="${TABBY_REAL_AGENT_ISOLATION_MODE:-mixed}"
+
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." >/dev/null 2>&1 && pwd -P)"
 tmux_real="$(command -v tmux || true)"
 if [ -z "$tmux_real" ] || ! command -v script >/dev/null 2>&1; then
@@ -24,10 +26,24 @@ claude_available() {
     command -v "$claude_bin" >/dev/null 2>&1 && "$claude_bin" auth status >/dev/null 2>&1
 }
 
-if ! codex_available || ! claude_available; then
-    echo "Skipping real agent isolation stress test (Codex and Claude must both be available)"
-    exit 0
-fi
+case "$MODE" in
+    mixed)
+        if ! codex_available || ! claude_available; then
+            echo "Skipping real agent isolation stress test (Codex and Claude must both be available)"
+            exit 0
+        fi
+        ;;
+    codex-only)
+        if ! codex_available; then
+            echo "Skipping real agent isolation stress test (Codex must be available)"
+            exit 0
+        fi
+        ;;
+    *)
+        echo "Unknown TABBY_REAL_AGENT_ISOLATION_MODE: $MODE"
+        exit 1
+        ;;
+esac
 
 SOCKET_PATH="$(mktemp -u /tmp/tabby-real-agent-isolation.XXXXXX.sock)"
 SESSION="tabby-real-agent-isolation"
@@ -217,7 +233,11 @@ setup_session() {
     tmx start-server
     tmx new-session -d -s "$SESSION" -n cdx-a -c "$PROJECT_ROOT" 'exec bash -l'
     tmx new-window -d -t "$SESSION:" -n cdx-b -c "$PROJECT_ROOT" 'exec bash -l'
-    tmx new-window -d -t "$SESSION:" -n cld-a -c "$PROJECT_ROOT" 'exec bash -l'
+    if [ "$MODE" = "codex-only" ]; then
+        tmx new-window -d -t "$SESSION:" -n cdx-c -c "$PROJECT_ROOT" 'exec bash -l'
+    else
+        tmx new-window -d -t "$SESSION:" -n cld-a -c "$PROJECT_ROOT" 'exec bash -l'
+    fi
     if command -v fish >/dev/null 2>&1; then
         tmx new-window -d -t "$SESSION:" -n fish -c "$PROJECT_ROOT" 'exec fish -l'
     else
@@ -239,13 +259,18 @@ setup_session() {
     tmx set-option -g @tabby_auto_rename off
     tmx rename-window -t "$SESSION:0" cdx-a
     tmx rename-window -t "$SESSION:1" cdx-b
-    tmx rename-window -t "$SESSION:2" cld-a
+    if [ "$MODE" = "codex-only" ]; then
+        tmx rename-window -t "$SESSION:2" cdx-c
+    else
+        tmx rename-window -t "$SESSION:2" cld-a
+    fi
     tmx rename-window -t "$SESSION:3" fish
     tmx rename-window -t "$SESSION:4" watch
     tmx run-shell -b -t "$SESSION:" "$PROJECT_ROOT/scripts/toggle_sidebar_daemon.sh"
     if ! wait_for 100 sidebar_contains "cdx-a" ||
         ! wait_for 100 sidebar_contains "cdx-b" ||
-        ! wait_for 100 sidebar_contains "cld-a" ||
+        { [ "$MODE" = "codex-only" ] && ! wait_for 100 sidebar_contains "cdx-c"; } ||
+        { [ "$MODE" = "mixed" ] && ! wait_for 100 sidebar_contains "cld-a"; } ||
         ! wait_for 100 sidebar_contains "fish"; then
         echo "✗ sidebar did not render all stress windows"
         tmx list-panes -a -F "#{window_name}|#{pane_id}|#{pane_current_command}|#{pane_start_command}" || true
@@ -420,35 +445,74 @@ send_agent_prompt() {
 }
 
 setup_session
-launch_codex cdx-a
-launch_codex cdx-b
-launch_claude cld-a
+if [ "$MODE" = "codex-only" ]; then
+    launch_codex cdx-a
+    launch_codex cdx-b
+    launch_codex cdx-c
 
-wait_for_all_input cdx-a cdx-b cld-a
-wait_for_input_ack_isolated cdx-a cdx-b cld-a
-wait_for_input_ack_isolated cdx-b cld-a
+    wait_for_all_input cdx-a cdx-b cdx-c
+    wait_for_input_ack_isolated cdx-a cdx-b cdx-c
+    wait_for_input_ack_isolated cdx-b cdx-c
 
-if ! wait_for 80 window_lacks_busy fish; then
-    echo "✗ fish window unexpectedly showed BUSY"
-    sidebar_capture || true
-    exit 1
+    if ! wait_for 80 window_lacks_busy fish; then
+        echo "✗ fish window unexpectedly showed BUSY"
+        sidebar_capture || true
+        exit 1
+    fi
+    if ! wait_for 80 window_lacks_input fish; then
+        echo "✗ fish window unexpectedly showed INPUT"
+        sidebar_capture || true
+        exit 1
+    fi
+
+    send_agent_prompt cdx-a
+    wait_for_isolated_busy cdx-a cdx-b cdx-c fish
+    wait_for_inputs_and_no_busy cdx-c
+    wait_for_busy_then_input_window cdx-a
+    wait_for_inputs_and_no_busy cdx-a cdx-c
+
+    send_agent_prompt cdx-b
+    wait_for_isolated_busy cdx-b cdx-a cdx-c fish
+    wait_for_inputs_and_no_busy cdx-a cdx-c
+    wait_for_busy_then_input_window cdx-b
+    wait_for_inputs_and_no_busy cdx-a cdx-b cdx-c
+
+    send_agent_prompt cdx-c
+    wait_for_isolated_busy cdx-c cdx-a cdx-b fish
+    wait_for_inputs_and_no_busy cdx-a cdx-b
+    wait_for_busy_then_input_window cdx-c
+    wait_for_inputs_and_no_busy cdx-a cdx-b cdx-c
+else
+    launch_codex cdx-a
+    launch_codex cdx-b
+    launch_claude cld-a
+
+    wait_for_all_input cdx-a cdx-b cld-a
+    wait_for_input_ack_isolated cdx-a cdx-b cld-a
+    wait_for_input_ack_isolated cdx-b cld-a
+
+    if ! wait_for 80 window_lacks_busy fish; then
+        echo "✗ fish window unexpectedly showed BUSY"
+        sidebar_capture || true
+        exit 1
+    fi
+    if ! wait_for 80 window_lacks_input fish; then
+        echo "✗ fish window unexpectedly showed INPUT"
+        sidebar_capture || true
+        exit 1
+    fi
+
+    send_agent_prompt cdx-a
+    wait_for_isolated_busy cdx-a cdx-b cld-a fish
+    wait_for_inputs_and_no_busy cld-a
+    wait_for_busy_then_input_window cdx-a
+    wait_for_inputs_and_no_busy cdx-a cld-a
+
+    send_agent_prompt cdx-b
+    wait_for_isolated_busy cdx-b cdx-a cld-a fish
+    wait_for_inputs_and_no_busy cdx-a cld-a
+    wait_for_busy_then_input_window cdx-b
+    wait_for_inputs_and_no_busy cdx-a cdx-b cld-a
 fi
-if ! wait_for 80 window_lacks_input fish; then
-    echo "✗ fish window unexpectedly showed INPUT"
-    sidebar_capture || true
-    exit 1
-fi
-
-send_agent_prompt cdx-a
-wait_for_isolated_busy cdx-a cdx-b cld-a fish
-wait_for_inputs_and_no_busy cld-a
-wait_for_busy_then_input_window cdx-a
-wait_for_inputs_and_no_busy cdx-a cld-a
-
-send_agent_prompt cdx-b
-wait_for_isolated_busy cdx-b cdx-a cld-a fish
-wait_for_inputs_and_no_busy cdx-a cld-a
-wait_for_busy_then_input_window cdx-b
-wait_for_inputs_and_no_busy cdx-a cdx-b cld-a
 
 echo "=== Real agent indicator isolation stress test passed ==="

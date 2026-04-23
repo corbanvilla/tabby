@@ -790,7 +790,7 @@ func NewCoordinator(sessionID string) *Coordinator {
 	}
 
 	// Configure busy detection from config
-	tmux.ConfigureBusyDetection(cfg.BusyDetection.ExtraIdle, cfg.BusyDetection.AITools, cfg.BusyDetection.IdleTimeout)
+	tmux.ConfigureBusyDetection(cfg.BusyDetection.ExtraIdle, cfg.BusyDetection.AITools)
 
 	// Load collapsed groups from tmux option
 	c.loadCollapsedGroups()
@@ -1628,10 +1628,10 @@ type tmuxSetOption struct {
 // For multi-pane windows, indicators appear on individual pane lines in the
 // sidebar. For single-pane windows, indicators stay at the window tab level.
 //
-// Detection signals (universal, works for any AI tool):
-//   - Braille spinner in pane title (U+2801-U+28FF): tool is working (Claude Code)
-//   - Pane title changed since last cycle: tool is active (OpenCode, Gemini, etc.)
-//   - Process tree CPU usage > 5%: tool is working (universal)
+// Detection signals:
+//   - Explicit Tabby hook options (@tabby_busy/@tabby_input)
+//   - Braille spinner in pane title (U+2801-U+28FF): tool is working
+//   - Spinner clearing while the tool is still running: tool needs user input
 //
 // State machine per pane:
 //   - Currently busy -> Busy indicator (animated spinner)
@@ -1642,8 +1642,9 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 	var pending []tmuxSetOption
 	now := time.Now().Unix()
 
-	// Load process table once per cycle for CPU-based busy detection.
-	// Throttle to max once per 2s; skip if indicators are disabled.
+	// Load process table once per cycle to recognize AI tools hidden behind
+	// wrappers like node/pnpm. Throttle to max once per 2s; skip if indicators
+	// are disabled.
 	// preloaded is non-nil when RefreshWindows pre-fetched it outside the lock
 	// (the normal path). The fallback inline load should not be reached in
 	// practice but is kept as a safety net for direct callers.
@@ -1904,7 +1905,6 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			seenPanes[pid] = true
 
 			hasSpinner := tmux.HasSpinner(pane.Title)
-			hasIdle := tmux.HasIdleIcon(pane.Title)
 
 			// === Hook-based detection for this pane ===
 			if win.HookBusy && pid == hookBusyPaneID {
@@ -1978,39 +1978,15 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			}
 
 			// === Passive detection ===
-			busy := false
+			// Trust app-owned terminal title state. Generic title churn and CPU
+			// usage are too noisy for multi-agent panes and can make idle tools
+			// look busy when another pane receives input.
+			busy := hasSpinner
 
-			// Signal 1: Braille spinner in this pane's title
-			if hasSpinner {
-				busy = true
-			}
-
-			// Signal 2: Title changed since last cycle
 			prevTitle, hasPrev := c.prevPaneTitle[pid]
 			hadSpinner := hasPrev && tmux.HasSpinner(prevTitle)
 			spinnerCleared := hadSpinner && !hasSpinner
-			inputPending := c.aiInputActive[pid] && !pane.InputAck
-			if hasPrev && pane.Title != prevTitle && !spinnerCleared && !hasIdle && !inputPending && !pane.InputAck {
-				busy = true
-			}
-
-			// Signal 3: CPU usage (skip when idle icon present)
-			if !busy && pane.PID > 0 && !hasIdle && !isNodeWrappedAIPane(pane, pt) {
-				cpuPct := pt.treeCPU(pane.PID)
-				if cpuPct > 5.0 {
-					busy = true
-				}
-			}
-
-			// State machine
 			wasBusy := c.prevPaneBusy[pid]
-			titleChanged := hasPrev && pane.Title != prevTitle
-			if busy && !hasSpinner && !titleChanged && wasBusy {
-				busyStarted := c.paneBusyStartedAt[pid]
-				if busyStarted > 0 && now-busyStarted >= tmux.AIIdleTimeout() {
-					busy = false
-				}
-			}
 
 			if busy {
 				if pane.AIBell {
@@ -2030,10 +2006,10 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 				}
 				delete(c.aiBellUntil, pid)
 				if !wasBusy {
-					coordinatorDebugLog.Printf("[AI] Pane %s (win %d, %s): -> BUSY (spinner=%v titleChanged=%v)",
-						pid, idx, pane.Command, hasSpinner, hasPrev && pane.Title != prevTitle)
+					coordinatorDebugLog.Printf("[AI] Pane %s (win %d, %s): -> BUSY (spinner)",
+						pid, idx, pane.Command)
 				}
-			} else if wasBusy {
+			} else if wasBusy || spinnerCleared {
 				// busy -> idle: tool waiting for user input
 				if pane.AIBell {
 					pending = append(pending, tmuxSetOption{windowID: pid, pane: true, key: "@tabby_bell", unset: true})
@@ -2140,13 +2116,12 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 	return pending
 }
 
-// processTree holds pre-parsed process table data for CPU-based busy detection.
+// processTree holds pre-parsed process table data for wrapper detection.
 // Call loadProcessTree() once per cycle and reuse for all windows.
 type processTree struct {
-	children  map[int][]int   // ppid -> child pids
-	cpuByPID  map[int]float64 // pid -> cpu%
-	commByPID map[int]string  // pid -> executable/comm
-	argsByPID map[int]string  // pid -> full argv
+	children  map[int][]int  // ppid -> child pids
+	commByPID map[int]string // pid -> executable/comm
+	argsByPID map[int]string // pid -> full argv
 }
 
 // loadProcessTree reads the system process table once. Returns nil on error.
@@ -2156,56 +2131,30 @@ func loadProcessTree() *processTree {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=,ppid=,%cpu=,comm=,args=").Output()
+	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=,ppid=,comm=,args=").Output()
 	if err != nil {
 		return nil
 	}
 	pt := &processTree{
 		children:  make(map[int][]int),
-		cpuByPID:  make(map[int]float64),
 		commByPID: make(map[int]string),
 		argsByPID: make(map[int]string),
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 5 {
+		if len(fields) < 4 {
 			continue
 		}
 		pid, err1 := strconv.Atoi(fields[0])
 		ppid, err2 := strconv.Atoi(fields[1])
-		cpu, err3 := strconv.ParseFloat(fields[2], 64)
-		if err1 != nil || err2 != nil || err3 != nil {
+		if err1 != nil || err2 != nil {
 			continue
 		}
 		pt.children[ppid] = append(pt.children[ppid], pid)
-		pt.cpuByPID[pid] = cpu
-		pt.commByPID[pid] = fields[3]
-		pt.argsByPID[pid] = strings.Join(fields[4:], " ")
+		pt.commByPID[pid] = fields[2]
+		pt.argsByPID[pid] = strings.Join(fields[3:], " ")
 	}
 	return pt
-}
-
-// treeCPU returns the total CPU% for a process and all its descendants.
-func (pt *processTree) treeCPU(pid int) float64 {
-	if pt == nil || pid <= 0 {
-		return 0
-	}
-	visited := make(map[int]bool)
-	queue := []int{pid}
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		if visited[cur] {
-			continue
-		}
-		visited[cur] = true
-		queue = append(queue, pt.children[cur]...)
-	}
-	var total float64
-	for p := range visited {
-		total += pt.cpuByPID[p]
-	}
-	return total
 }
 
 func (pt *processTree) subtreeHasAITool(pid int) bool {
@@ -2229,28 +2178,6 @@ func (pt *processTree) subtreeHasAITool(pid int) bool {
 	return false
 }
 
-func (pt *processTree) subtreeHasNodeWrappedAITool(pid int) bool {
-	if pt == nil || pid <= 0 {
-		return false
-	}
-	visited := make(map[int]bool)
-	queue := []int{pid}
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		if visited[cur] {
-			continue
-		}
-		visited[cur] = true
-		comm := strings.ToLower(filepath.Base(strings.TrimSpace(pt.commByPID[cur])))
-		if comm == "node" && tmux.IsAIToolCommandLine(pt.commByPID[cur], pt.argsByPID[cur]) {
-			return true
-		}
-		queue = append(queue, pt.children[cur]...)
-	}
-	return false
-}
-
 func isAIPane(pane tmux.Pane, pt *processTree) bool {
 	if tmux.IsAIToolCommandLine(pane.Command, pane.StartCommand) {
 		return true
@@ -2259,16 +2186,6 @@ func isAIPane(pane tmux.Pane, pt *processTree) bool {
 		return true
 	}
 	return false
-}
-
-func isNodeWrappedAIPane(pane *tmux.Pane, pt *processTree) bool {
-	if pane == nil {
-		return false
-	}
-	if strings.EqualFold(filepath.Base(strings.TrimSpace(pane.Command)), "node") && tmux.IsAIToolCommandLine(pane.Command, pane.StartCommand) {
-		return true
-	}
-	return pane.PID > 0 && pt != nil && pt.subtreeHasNodeWrappedAITool(pane.PID)
 }
 
 // computeVisualPositions builds a map of window ID -> visual position in the

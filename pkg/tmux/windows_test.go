@@ -43,7 +43,6 @@ func restoreState(t *testing.T) {
 	origRunner := DefaultRunner
 	origTarget := sessionTarget
 	origCanonicalTarget := sessionTargetCanonicalID
-	origAITimeout := aiIdleTimeout
 	origAI := make(map[string]bool, len(aiToolCommands))
 	for k, v := range aiToolCommands {
 		origAI[k] = v
@@ -56,7 +55,6 @@ func restoreState(t *testing.T) {
 		DefaultRunner = origRunner
 		sessionTarget = origTarget
 		sessionTargetCanonicalID = origCanonicalTarget
-		aiIdleTimeout = origAITimeout
 		aiToolCommands = origAI
 		idleCommands = origIdle
 	})
@@ -200,11 +198,6 @@ func TestHasIdleIcon(t *testing.T) {
 	})
 }
 
-func TestAIIdleTimeout(t *testing.T) {
-	restoreState(t)
-	assert.Equal(t, int64(10), AIIdleTimeout())
-}
-
 func TestSetSessionTarget(t *testing.T) {
 	restoreState(t)
 
@@ -257,7 +250,7 @@ func TestListWindows_ParsesEscapedDelimiterOutput(t *testing.T) {
 func TestConfigureBusyDetection(t *testing.T) {
 	t.Run("adds_extra_idle_commands", func(t *testing.T) {
 		restoreState(t)
-		ConfigureBusyDetection([]string{"mycmd"}, nil, 0)
+		ConfigureBusyDetection([]string{"mycmd"}, nil)
 		assert.True(t, idleCommands["mycmd"])
 		assert.False(t, isPaneBusy("mycmd"))
 		assert.True(t, isPaneBusy("make"), "make still busy")
@@ -265,29 +258,17 @@ func TestConfigureBusyDetection(t *testing.T) {
 
 	t.Run("sets_ai_tools", func(t *testing.T) {
 		restoreState(t)
-		ConfigureBusyDetection(nil, []string{"myai", "assistant"}, 0)
+		ConfigureBusyDetection(nil, []string{"myai", "assistant"})
 		assert.True(t, aiToolCommands["myai"])
 		assert.True(t, aiToolCommands["assistant"])
 		assert.True(t, IsAITool("myai"))
 	})
 
-	t.Run("updates_ai_idle_timeout", func(t *testing.T) {
-		restoreState(t)
-		ConfigureBusyDetection(nil, nil, 30)
-		assert.Equal(t, int64(30), aiIdleTimeout)
-	})
-
-	t.Run("zero_timeout_leaves_timeout_unchanged", func(t *testing.T) {
-		restoreState(t)
-		aiIdleTimeout = 15
-		ConfigureBusyDetection(nil, nil, 0)
-		assert.Equal(t, int64(15), aiIdleTimeout)
-	})
 }
 
 func TestIsAIToolCommandLine(t *testing.T) {
 	restoreState(t)
-	ConfigureBusyDetection(nil, []string{"codex", "claude"}, 0)
+	ConfigureBusyDetection(nil, []string{"codex", "claude"})
 
 	assert.True(t, IsAIToolCommandLine("codex", ""))
 	assert.True(t, IsAIToolCommandLine("node", "/home/me/.local/share/pnpm/.../@openai/codex/bin/codex.js"))

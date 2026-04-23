@@ -94,10 +94,6 @@ var idleCommands = map[string]bool{
 // "working" (busy) and "waiting for input" states. Configured from config.yaml.
 var aiToolCommands = map[string]bool{}
 
-// aiIdleTimeout is how many seconds of no pane output before an AI tool
-// is considered "waiting for input" rather than "busy working".
-var aiIdleTimeout int64 = 10
-
 var sessionTarget string
 var sessionTargetCanonicalID string
 
@@ -129,18 +125,15 @@ func legacyWindowIndexKey(idx string) string {
 
 // ConfigureBusyDetection applies user config to idle/busy detection.
 // extraIdle adds commands to the idle list.
-// aiTools lists interactive AI tools that distinguish busy vs waiting-for-input.
-// idleTimeout is seconds of no output before an AI tool is considered idle.
-func ConfigureBusyDetection(extraIdle, aiTools []string, idleTimeout int) {
+// aiTools lists interactive AI tools that distinguish busy vs waiting-for-input
+// through app-owned signals such as terminal title spinners or explicit hooks.
+func ConfigureBusyDetection(extraIdle, aiTools []string) {
 	for _, cmd := range extraIdle {
 		idleCommands[cmd] = true
 	}
 	aiToolCommands = make(map[string]bool, len(aiTools))
 	for _, cmd := range aiTools {
 		aiToolCommands[cmd] = true
-	}
-	if idleTimeout > 0 {
-		aiIdleTimeout = int64(idleTimeout)
 	}
 }
 
@@ -203,11 +196,6 @@ func HasIdleIcon(title string) bool {
 		return r == 0x2733
 	}
 	return false
-}
-
-// AIIdleTimeout returns the configured idle timeout in seconds.
-func AIIdleTimeout() int64 {
-	return aiIdleTimeout
 }
 
 // remoteCommands are processes that connect to remote systems

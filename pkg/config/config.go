@@ -22,11 +22,13 @@ type Config struct {
 
 // BusyDetection configures which pane commands trigger the busy indicator.
 // By default, any foreground process that isn't a shell or editor is "busy".
-// AI tools have activity-based detection: busy when outputting, input when idle.
+// AI tools use app-owned signals such as terminal title spinners or explicit
+// hooks so unrelated title churn and CPU activity do not create false busy
+// states.
 type BusyDetection struct {
 	ExtraIdle   []string `yaml:"extra_idle"`   // Additional commands to treat as idle (not busy)
-	AITools     []string `yaml:"ai_tools"`     // Interactive AI tools (busy when active, input when idle)
-	IdleTimeout int      `yaml:"idle_timeout"` // Seconds of no output before AI tool shows as "input needed" (default: 10)
+	AITools     []string `yaml:"ai_tools"`     // Interactive AI tools with signal-based busy/input state
+	IdleTimeout int      `yaml:"idle_timeout"` // Deprecated; ignored for AI tools
 }
 
 type TerminalTitle struct {

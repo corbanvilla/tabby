@@ -4,7 +4,6 @@ import (
 	"io"
 	"log"
 	"testing"
-	"time"
 
 	"github.com/brendandebeasi/tabby/pkg/config"
 	"github.com/brendandebeasi/tabby/pkg/grouping"
@@ -338,50 +337,10 @@ func TestGetWindowsHash_ChangesWithState(t *testing.T) {
 	assert.NotEqual(t, h1, h2)
 }
 
-func TestTreeCPU_NilTree(t *testing.T) {
-	var pt *processTree
-	assert.Equal(t, 0.0, pt.treeCPU(1))
-}
-
-func TestTreeCPU_ZeroPID(t *testing.T) {
-	pt := &processTree{children: make(map[int][]int), cpuByPID: make(map[int]float64)}
-	assert.Equal(t, 0.0, pt.treeCPU(0))
-}
-
-func TestTreeCPU_NegativePID(t *testing.T) {
-	pt := &processTree{children: make(map[int][]int), cpuByPID: make(map[int]float64)}
-	assert.Equal(t, 0.0, pt.treeCPU(-1))
-}
-
-func TestTreeCPU_SingleProcess(t *testing.T) {
-	pt := &processTree{
-		children: make(map[int][]int),
-		cpuByPID: map[int]float64{100: 5.5},
-	}
-	assert.Equal(t, 5.5, pt.treeCPU(100))
-}
-
-func TestTreeCPU_WithChildren(t *testing.T) {
-	pt := &processTree{
-		children: map[int][]int{100: {101, 102}},
-		cpuByPID: map[int]float64{100: 1.0, 101: 2.0, 102: 3.0},
-	}
-	assert.Equal(t, 6.0, pt.treeCPU(100))
-}
-
-func TestTreeCPU_UnknownPID(t *testing.T) {
-	pt := &processTree{
-		children: make(map[int][]int),
-		cpuByPID: map[int]float64{100: 5.0},
-	}
-	assert.Equal(t, 0.0, pt.treeCPU(999))
-}
-
 func TestProcessTreeSubtreeHasAITool(t *testing.T) {
-	tmux.ConfigureBusyDetection(nil, []string{"codex"}, 0)
+	tmux.ConfigureBusyDetection(nil, []string{"codex"})
 	pt := &processTree{
 		children:  map[int][]int{100: {101}, 101: {102}},
-		cpuByPID:  map[int]float64{100: 0, 101: 0, 102: 0},
 		commByPID: map[int]string{100: "fish", 101: "node", 102: "codex"},
 		argsByPID: map[int]string{100: "-fish", 101: "node codex.js", 102: "codex --help"},
 	}
@@ -501,7 +460,6 @@ func TestProcessAIToolStates_WithPreloadedProcessTree(t *testing.T) {
 	}
 	pt := &processTree{
 		children: make(map[int][]int),
-		cpuByPID: make(map[int]float64),
 	}
 	pending := c.processAIToolStates(pt)
 	assert.NotNil(t, c.cachedProcessTree)
@@ -583,7 +541,7 @@ func TestProcessAIToolStates_BusyClearsInputAck(t *testing.T) {
 }
 
 func TestProcessAIToolStates_CodexAndClaudeSpinnerShowsBusy(t *testing.T) {
-	tmux.ConfigureBusyDetection(nil, []string{"codex"}, 0)
+	tmux.ConfigureBusyDetection(nil, []string{"codex"})
 
 	for _, tc := range []struct {
 		name    string
@@ -604,7 +562,6 @@ func TestProcessAIToolStates_CodexAndClaudeSpinnerShowsBusy(t *testing.T) {
 
 			pending := c.processAIToolStates(&processTree{
 				children: make(map[int][]int),
-				cpuByPID: make(map[int]float64),
 			})
 			assert.Empty(t, pending)
 			assert.True(t, c.windows[0].Panes[0].AIBusy)
@@ -615,7 +572,7 @@ func TestProcessAIToolStates_CodexAndClaudeSpinnerShowsBusy(t *testing.T) {
 }
 
 func TestProcessAIToolStates_NodeWrappedAIToolBusyIsIsolated(t *testing.T) {
-	tmux.ConfigureBusyDetection(nil, []string{"codex"}, 0)
+	tmux.ConfigureBusyDetection(nil, []string{"codex"})
 	c := newTestCoordinator(t)
 	c.config.Indicators.Busy.Enabled = true
 	c.config.Indicators.Input.Enabled = true
@@ -623,12 +580,6 @@ func TestProcessAIToolStates_NodeWrappedAIToolBusyIsIsolated(t *testing.T) {
 		children: map[int][]int{
 			100: []int{101},
 			200: []int{201},
-		},
-		cpuByPID: map[int]float64{
-			100: 0,
-			101: 0,
-			200: 0,
-			201: 30,
 		},
 		commByPID: map[int]string{
 			100: "fish",
@@ -700,7 +651,6 @@ func TestProcessAIToolStates_InputAckClearsOnlyViewedWindow(t *testing.T) {
 
 	pending := c.processAIToolStates(&processTree{
 		children: make(map[int][]int),
-		cpuByPID: make(map[int]float64),
 	})
 
 	foundViewedUnset := false
@@ -736,7 +686,6 @@ func TestProcessAIToolStates_NewBusyTurnPreservesOtherUnviewedInput(t *testing.T
 
 	pending := c.processAIToolStates(&processTree{
 		children: make(map[int][]int),
-		cpuByPID: make(map[int]float64),
 	})
 
 	foundAckUnset := false
@@ -762,7 +711,6 @@ func TestProcessAIToolStates_InputPersistsAcrossPostSpinnerTitleChanges(t *testi
 	c.config.Indicators.Input.Enabled = true
 	pt := &processTree{
 		children: make(map[int][]int),
-		cpuByPID: map[int]float64{123: 0},
 	}
 
 	c.windows = []tmux.Window{
@@ -803,7 +751,6 @@ func TestProcessAIToolStates_InputAckSuppressesFocusTitleChurn(t *testing.T) {
 	c.prevPaneBusy["%1"] = false
 	pt := &processTree{
 		children: make(map[int][]int),
-		cpuByPID: map[int]float64{123: 0},
 	}
 
 	c.windows = []tmux.Window{
@@ -834,7 +781,6 @@ func TestProcessAIToolStates_HookBusyClearsToInput(t *testing.T) {
 	c.config.Indicators.Input.Enabled = true
 	pt := &processTree{
 		children: make(map[int][]int),
-		cpuByPID: map[int]float64{123: 0},
 	}
 
 	c.windows = []tmux.Window{
@@ -857,16 +803,13 @@ func TestProcessAIToolStates_HookBusyClearsToInput(t *testing.T) {
 	assert.True(t, c.windows[0].Input)
 }
 
-func TestProcessAIToolStates_CPUOnlyBusyTimesOutToInput(t *testing.T) {
+func TestProcessAIToolStates_CPUOnlyDoesNotCreateBusy(t *testing.T) {
 	c := newTestCoordinator(t)
 	c.config.Indicators.Busy.Enabled = true
 	c.config.Indicators.Input.Enabled = true
-	c.prevPaneBusy["%1"] = true
 	c.prevPaneTitle["%1"] = "codex"
-	c.paneBusyStartedAt["%1"] = time.Now().Unix() - tmux.AIIdleTimeout() - 1
 	pt := &processTree{
 		children: make(map[int][]int),
-		cpuByPID: map[int]float64{123: 20},
 	}
 	c.windows = []tmux.Window{
 		{ID: "@1", Index: 1, Active: true, Panes: []tmux.Pane{
@@ -876,8 +819,29 @@ func TestProcessAIToolStates_CPUOnlyBusyTimesOutToInput(t *testing.T) {
 
 	c.processAIToolStates(pt)
 	assert.False(t, c.windows[0].Panes[0].AIBusy)
-	assert.True(t, c.windows[0].Panes[0].AIInput)
-	assert.True(t, c.windows[0].Input)
+	assert.False(t, c.windows[0].Panes[0].AIInput)
+	assert.False(t, c.windows[0].Input)
+}
+
+func TestProcessAIToolStates_TitleChangeOnlyDoesNotCreateBusy(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = true
+	c.config.Indicators.Input.Enabled = true
+	c.prevPaneTitle["%1"] = "codex"
+	pt := &processTree{
+		children: make(map[int][]int),
+	}
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Active: true, Panes: []tmux.Pane{
+			{ID: "%1", Command: "codex", PID: 123, Title: "codex focused", Active: true},
+		}},
+	}
+
+	c.processAIToolStates(pt)
+	assert.False(t, c.windows[0].Panes[0].AIBusy)
+	assert.False(t, c.windows[0].Panes[0].AIInput)
+	assert.False(t, c.windows[0].Busy)
+	assert.False(t, c.windows[0].Input)
 }
 
 func TestProcessAIToolStates_PreservesHookInputAfterProcessReturnsToShell(t *testing.T) {

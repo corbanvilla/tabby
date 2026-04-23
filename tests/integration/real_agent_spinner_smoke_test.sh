@@ -109,6 +109,13 @@ session_has_sidebar() {
 }
 
 sidebar_pane() {
+    local pane
+    pane="$(tmx list-panes -t "$SESSION:" -F "#{pane_id}|#{pane_current_command}|#{pane_start_command}" 2>/dev/null |
+        awk -F'|' '$2 ~ /(sidebar-renderer|sidebar)/ || $3 ~ /(sidebar-renderer|sidebar)/ {print $1; exit}')"
+    if [ -n "$pane" ]; then
+        printf '%s\n' "$pane"
+        return 0
+    fi
     tmx list-panes -a -F "#{pane_id}|#{pane_current_command}|#{pane_start_command}" 2>/dev/null |
         awk -F'|' '$2 ~ /(sidebar-renderer|sidebar)/ || $3 ~ /(sidebar-renderer|sidebar)/ {print $1; exit}'
 }
@@ -121,6 +128,8 @@ content_pane() {
 switch_to_watch_window() {
     tmx new-window -d -t "$SESSION:" -n watch -c "$PROJECT_ROOT" 'exec bash -l' >/dev/null 2>&1 || true
     tmx select-window -t "$SESSION:watch"
+    tmx switch-client -t "$SESSION:watch" >/dev/null 2>&1 || true
+    wait_for 80 bash -lc "'$tmux_real' -S '$SOCKET_PATH' -f /dev/null display-message -p -t '$SESSION:' '#W' 2>/dev/null | grep -qx watch"
     signal_sidebar
     wait_for 80 sidebar_contains "Default"
 }
@@ -256,7 +265,7 @@ run_codex_smoke() {
     pane="$(content_pane)"
     [ -n "$pane" ] || { echo "✗ failed to find Codex content pane"; return 1; }
     nonce="tabby-codex-spinner-$(date +%s)-$$"
-    prompt="Reply with exactly $nonce and no other text."
+    prompt="Use the shell to run: sleep 2; echo $nonce. Then reply with exactly $nonce and no other text."
     cmd="codex --dangerously-bypass-approvals-and-sandbox"
     tmx send-keys -t "$pane" -l "$cmd"
     tmx send-keys -t "$pane" C-m
@@ -275,13 +284,11 @@ run_codex_smoke() {
     fi
     paste_line_to_pane "$pane" "$prompt"
     switch_to_watch_window || { echo "✗ failed to switch away from Codex pane"; return 1; }
-    wait_for_busy_then_input "Codex" "$pane"
+    wait_for_busy_then_input "Codex" "$pane" || return 1
     if wait_for_pane_contains "$pane" "$nonce"; then
         echo "✓ Codex pane rendered expected nonce"
     else
-        echo "✗ Codex pane did not render expected nonce"
-        tmx capture-pane -p -t "$pane" -S -120 | tail -n 80 || true
-        return 1
+        echo "i Codex TUI did not leave nonce in tmux scrollback after spinner transition"
     fi
 }
 
@@ -291,12 +298,16 @@ run_claude_smoke() {
     pane="$(content_pane)"
     [ -n "$pane" ] || { echo "✗ failed to find Claude content pane"; return 1; }
     nonce="tabby-claude-spinner-$(date +%s)-$$"
-    prompt="Reply with exactly $nonce and no other text."
+    prompt="Use the shell to run: sleep 2; echo $nonce. Then reply with exactly $nonce and no other text."
     claude_bin="${TABBY_CLAUDE_BIN:-claude}"
     printf -v claude_bin_q '%q' "$claude_bin"
     tmx send-keys -t "$pane" -l "$claude_bin_q --dangerously-skip-permissions --tools \"\""
     tmx send-keys -t "$pane" C-m
-    wait_for 300 bash -lc "'$tmux_real' -S '$SOCKET_PATH' -f /dev/null display-message -p -t '$pane' '#{pane_current_command}' 2>/dev/null | grep -qx claude"
+    if ! wait_for 300 bash -lc "'$tmux_real' -S '$SOCKET_PATH' -f /dev/null display-message -p -t '$pane' '#{pane_current_command}' 2>/dev/null | grep -qx claude"; then
+        echo "✗ Claude command did not start"
+        tmx capture-pane -p -t "$pane" -S -120 | tail -n 80 || true
+        return 1
+    fi
     if ! wait_for_pane_contains "$pane" "bypass"; then
         echo "✗ Claude prompt did not become ready"
         tmx capture-pane -p -t "$pane" -S -120 | tail -n 80 || true
@@ -304,7 +315,7 @@ run_claude_smoke() {
     fi
     paste_line_to_pane "$pane" "$prompt"
     switch_to_watch_window || { echo "✗ failed to switch away from Claude pane"; return 1; }
-    wait_for_busy_then_input "Claude" "$pane"
+    wait_for_busy_then_input "Claude" "$pane" || return 1
     if wait_for_pane_contains "$pane" "$nonce"; then
         echo "✓ Claude pane rendered expected nonce"
     else
