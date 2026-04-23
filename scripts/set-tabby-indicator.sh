@@ -17,6 +17,11 @@
 INDICATOR="$1"
 VALUE="$2"
 
+CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$CURRENT_DIR/scripts/_tmux_socket_env.sh"
+tabby_init_tmux_socket_env "$CURRENT_DIR"
+source "$CURRENT_DIR/scripts/_session_owner.sh"
+
 # State directory for tracking which panes/windows were marked busy
 STATE_DIR="/tmp/tabby-state"
 mkdir -p "$STATE_DIR" 2>/dev/null
@@ -272,9 +277,12 @@ case "$INDICATOR" in
         ;;
 esac
 
-# Signal the daemon to refresh immediately (USR1 triggers instant re-render)
+# Signal the daemon to refresh immediately (USR1 triggers instant re-render).
+# Keep this socket-prefix aware so hooks work in shared/named tmux sockets.
 SESSION_ID=$(tmux display-message -p '#{session_id}' 2>/dev/null)
-DAEMON_PID_FILE="/tmp/tabby-daemon-${SESSION_ID}.pid"
+SESSION_ID="$(tabby_canonical_session_id "$SESSION_ID")"
+RUNTIME_PREFIX="${TABBY_RUNTIME_PREFIX:-}"
+DAEMON_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"
 if [ -f "$DAEMON_PID_FILE" ]; then
-    kill -USR1 "$(cat "$DAEMON_PID_FILE")" 2>/dev/null
+    kill -USR1 "$(cat "$DAEMON_PID_FILE")" 2>/dev/null || true
 fi

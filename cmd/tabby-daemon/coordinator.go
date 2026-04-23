@@ -1990,7 +1990,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			hadSpinner := hasPrev && tmux.HasSpinner(prevTitle)
 			spinnerCleared := hadSpinner && !hasSpinner
 			inputPending := c.aiInputActive[pid] && !pane.InputAck
-			if hasPrev && pane.Title != prevTitle && !spinnerCleared && !hasIdle && !inputPending {
+			if hasPrev && pane.Title != prevTitle && !spinnerCleared && !hasIdle && !inputPending && !pane.InputAck {
 				busy = true
 			}
 

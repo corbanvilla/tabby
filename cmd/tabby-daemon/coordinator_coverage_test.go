@@ -794,6 +794,40 @@ func TestProcessAIToolStates_InputPersistsAcrossPostSpinnerTitleChanges(t *testi
 	assert.True(t, c.windows[0].Input)
 }
 
+func TestProcessAIToolStates_InputAckSuppressesFocusTitleChurn(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.config.Indicators.Busy.Enabled = true
+	c.config.Indicators.Input.Enabled = true
+	c.aiInputActive["%1"] = true
+	c.prevPaneTitle["%1"] = "codex ready"
+	c.prevPaneBusy["%1"] = false
+	pt := &processTree{
+		children: make(map[int][]int),
+		cpuByPID: map[int]float64{123: 0},
+	}
+
+	c.windows = []tmux.Window{
+		{ID: "@1", Index: 1, Active: true, Input: true, Panes: []tmux.Pane{
+			{ID: "%1", Command: "codex", PID: 123, Title: "codex ready focused", Active: true, InputAck: true},
+		}},
+	}
+
+	pending := c.processAIToolStates(pt)
+
+	foundInputUnset := false
+	for _, p := range pending {
+		if p.windowID == "@1" && p.key == "@tabby_input" && p.unset {
+			foundInputUnset = true
+			break
+		}
+	}
+	assert.True(t, foundInputUnset, "viewing the completed pane should clear the input marker")
+	assert.False(t, c.windows[0].Panes[0].AIBusy, "focus/title churn after ack must not restart busy")
+	assert.False(t, c.windows[0].Busy)
+	assert.False(t, c.windows[0].Panes[0].AIInput)
+	assert.False(t, c.aiInputActive["%1"])
+}
+
 func TestProcessAIToolStates_HookBusyClearsToInput(t *testing.T) {
 	c := newTestCoordinator(t)
 	c.config.Indicators.Busy.Enabled = true

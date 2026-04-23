@@ -7,6 +7,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." >/dev/null 2>&1 && pwd
 TABBY_TMUX="$PROJECT_ROOT/bin/tmux"
 SOCKET_ENV="$PROJECT_ROOT/scripts/_tmux_socket_env.sh"
 SIGNAL_SCRIPT="$PROJECT_ROOT/scripts/signal_sidebar.sh"
+INDICATOR_SCRIPT="$PROJECT_ROOT/scripts/set-tabby-indicator.sh"
 RESTORE_SCRIPT="$PROJECT_ROOT/scripts/restore_sidebar.sh"
 FOCUS_SCRIPT="$PROJECT_ROOT/scripts/focus_new_window.sh"
 RESIZE_SCRIPT="$PROJECT_ROOT/scripts/resize_sidebar.sh"
@@ -45,6 +46,7 @@ else
 fi
 
 check_bootstrap "$SIGNAL_SCRIPT" "signal_sidebar.sh"
+check_bootstrap "$INDICATOR_SCRIPT" "set-tabby-indicator.sh"
 check_bootstrap "$RESTORE_SCRIPT" "restore_sidebar.sh"
 check_bootstrap "$FOCUS_SCRIPT" "focus_new_window.sh"
 check_bootstrap "$RESIZE_SCRIPT" "resize_sidebar.sh"
@@ -116,6 +118,13 @@ if grep -q 'tmux set-option -g @tabby_daemon_pid "$DAEMON_PID"' "$WATCHDOG_SCRIP
   echo "✓ watchdog publishes daemon pid for tmux hooks after every start"
 else
   echo "✗ watchdog does not refresh @tabby_daemon_pid"
+  exit 1
+fi
+
+if grep -Fq 'DAEMON_PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"' "$INDICATOR_SCRIPT"; then
+  echo "✓ set-tabby-indicator signals socket-prefixed daemon pid files"
+else
+  echo "✗ set-tabby-indicator does not signal socket-prefixed daemon pid files"
   exit 1
 fi
 

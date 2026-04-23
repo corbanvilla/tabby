@@ -312,21 +312,29 @@ wait_for_all_input() {
 wait_for_input_ack_isolated() {
     local viewed_name="$1"
     shift
-    local i ok name
+    local i ok name stable
     view_agent_window "$viewed_name"
+    stable=0
     for i in $(seq 1 300); do
         ok=1
         window_lacks_input "$viewed_name" || ok=0
+        window_lacks_busy "$viewed_name" || ok=0
         for name in "$@"; do
             window_has_state "$name" "INPUT" || ok=0
+            window_lacks_busy "$name" || ok=0
         done
         if [ "$ok" = "1" ]; then
-            switch_to_watch_window
-            return 0
+            stable=$((stable + 1))
+            if [ "$stable" -ge 10 ]; then
+                switch_to_watch_window
+                return 0
+            fi
+        else
+            stable=0
         fi
         sleep 0.2
     done
-    echo "✗ viewing $viewed_name did not clear only that INPUT marker"
+    echo "✗ viewing $viewed_name did not clear only that INPUT marker without BUSY regression"
     sidebar_capture || true
     return 1
 }
