@@ -44,10 +44,10 @@ func TestDesaturateHex(t *testing.T) {
 }
 
 func TestHasActiveIndicatorAnimation(t *testing.T) {
-	t.Run("returns_true_when_multiple_frames_configured", func(t *testing.T) {
+	t.Run("returns_false_when_multiple_frames_configured", func(t *testing.T) {
 		c := newTestCoordinator(t)
 		c.config.Sidebar.Colors.ActiveIndicatorFrames = []string{"a", "b"}
-		assert.True(t, c.HasActiveIndicatorAnimation())
+		assert.False(t, c.HasActiveIndicatorAnimation())
 	})
 
 	t.Run("returns_false_with_single_frame", func(t *testing.T) {
@@ -77,7 +77,7 @@ func TestGetSlowSpinnerFrame(t *testing.T) {
 }
 
 func TestGetAnimatedActiveIndicator(t *testing.T) {
-	t.Run("cycles_through_frames", func(t *testing.T) {
+	t.Run("uses_first_visible_frame_without_advancing", func(t *testing.T) {
 		c := newTestCoordinator(t)
 		c.config.Sidebar.Colors.ActiveIndicatorFrames = []string{"A", "B", "C"}
 
@@ -85,20 +85,26 @@ func TestGetAnimatedActiveIndicator(t *testing.T) {
 		assert.Equal(t, "A", c.getAnimatedActiveIndicator("fallback"))
 
 		c.spinnerFrame = 2
-		assert.Equal(t, "B", c.getAnimatedActiveIndicator("fallback"))
+		assert.Equal(t, "A", c.getAnimatedActiveIndicator("fallback"))
 	})
 
-	t.Run("wraps_around_frame_count", func(t *testing.T) {
+	t.Run("skips_blank_frames", func(t *testing.T) {
 		c := newTestCoordinator(t)
-		c.config.Sidebar.Colors.ActiveIndicatorFrames = []string{"X", "Y"}
+		c.config.Sidebar.Colors.ActiveIndicatorFrames = []string{"", " ", "Y"}
 		c.spinnerFrame = 4
 		got := c.getAnimatedActiveIndicator("fallback")
-		assert.Contains(t, []string{"X", "Y"}, got)
+		assert.Equal(t, "Y", got)
 	})
 
 	t.Run("empty_frames_returns_fallback", func(t *testing.T) {
 		c := newTestCoordinator(t)
 		c.config.Sidebar.Colors.ActiveIndicatorFrames = nil
+		assert.Equal(t, "fallback", c.getAnimatedActiveIndicator("fallback"))
+	})
+
+	t.Run("blank_only_frames_return_fallback", func(t *testing.T) {
+		c := newTestCoordinator(t)
+		c.config.Sidebar.Colors.ActiveIndicatorFrames = []string{"", " "}
 		assert.Equal(t, "fallback", c.getAnimatedActiveIndicator("fallback"))
 	})
 }

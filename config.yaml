@@ -97,7 +97,7 @@ sidebar:
     pane_fg: "#f5f5f5"              # Pane text (almost white)
     disclosure_expanded: "⊟"        # Expanded state icon (boxed minus)
     disclosure_collapsed: "⊞"       # Collapsed state icon (boxed plus)
-    active_indicator_frames: ["▶", "▶", "▶", "▶", "▶", " "]
+    active_indicator_frames: ["▶"]
     active_indicator_fg: "#000000"
     active_indicator_bg: "transparent"
     tree_branch: "├─"               # Branch connector

@@ -5257,15 +5257,21 @@ func (c *Coordinator) getAnimatedActiveIndicator(fallback string) string {
 	if len(frames) == 0 {
 		return fallback
 	}
-	frame := frames[c.getSlowSpinnerFrame()%len(frames)]
-	if frame == "" {
-		return " "
+
+	// The active-window marker is present whenever the sidebar is visible. If it
+	// drives the animation ticker, an otherwise idle session redraws forever.
+	// Treat the configured frames as an ordered preference list and use the first
+	// visible glyph as a static marker.
+	for _, frame := range frames {
+		if strings.TrimSpace(frame) != "" {
+			return frame
+		}
 	}
-	return frame
+	return fallback
 }
 
 func (c *Coordinator) HasActiveIndicatorAnimation() bool {
-	return len(c.config.Sidebar.Colors.ActiveIndicatorFrames) > 1
+	return false
 }
 
 // getIndicatorIcon returns the icon for an indicator

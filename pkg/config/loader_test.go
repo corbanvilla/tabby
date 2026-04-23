@@ -183,7 +183,7 @@ func TestApplyDefaults_SidebarColors(t *testing.T) {
 		})
 	}
 
-	assert.Len(t, cfg.Sidebar.Colors.ActiveIndicatorFrames, 6)
+	assert.Equal(t, []string{"▶"}, cfg.Sidebar.Colors.ActiveIndicatorFrames)
 }
 
 func TestApplyDefaults_UserValuesNotOverwritten(t *testing.T) {

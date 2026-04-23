@@ -415,12 +415,12 @@ func TestGetAnimatedActiveIndicator_NonEmptyFrame(t *testing.T) {
 	c.config.Sidebar.Colors.ActiveIndicatorFrames = []string{"A", "B", "C"}
 	c.spinnerFrame = 0
 	result := c.getAnimatedActiveIndicator("X")
-	assert.Contains(t, []string{"A", "B", "C"}, result)
+	assert.Equal(t, "A", result)
 }
 
-func TestGetAnimatedActiveIndicator_BlankFrameBecomesSpace(t *testing.T) {
+func TestGetAnimatedActiveIndicator_BlankFrameSkipped(t *testing.T) {
 	c := newTestCoordinator(t)
 	c.config.Sidebar.Colors.ActiveIndicatorFrames = []string{"", "A"}
 	c.spinnerFrame = 0
-	assert.Equal(t, " ", c.getAnimatedActiveIndicator("X"))
+	assert.Equal(t, "A", c.getAnimatedActiveIndicator("X"))
 }

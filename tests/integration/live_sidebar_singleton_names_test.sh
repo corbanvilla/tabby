@@ -16,6 +16,7 @@ fi
 
 SOCKET="tabby-live-names-$$"
 SOCKET_PATH="/tmp/tmux-$(id -u)/$SOCKET"
+RUNTIME_PREFIX="sock-$(printf '%s' "$SOCKET_PATH" | cksum | awk '{print $1}')-"
 SESSION="live-names"
 CLIENT_PID=""
 
@@ -116,7 +117,8 @@ if ! wait_for 40 sidebar_count_ok; then
   exit 1
 fi
 
-PID_FILE="$(find /tmp -maxdepth 1 -name 'tabby-daemon-*.pid' | head -n1)"
+SESSION_ID="$(tmx display-message -p -t "$SESSION" '#{session_id}')"
+PID_FILE="/tmp/${RUNTIME_PREFIX}tabby-daemon-${SESSION_ID}.pid"
 if [ -n "$PID_FILE" ] && [ -f "$PID_FILE" ]; then
   PID="$(cat "$PID_FILE")"
   for _ in $(seq 1 10); do
