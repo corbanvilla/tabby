@@ -15,6 +15,7 @@ TOGGLE_SCRIPT="$PROJECT_ROOT/scripts/toggle_sidebar.sh"
 TOGGLE_DAEMON_SCRIPT="$PROJECT_ROOT/scripts/toggle_sidebar_daemon.sh"
 WATCHDOG_SCRIPT="$PROJECT_ROOT/scripts/watchdog_daemon.sh"
 NEW_WINDOW_SCRIPT="$PROJECT_ROOT/scripts/new_window_with_group.sh"
+APPLY_GROUP_SCRIPT="$PROJECT_ROOT/scripts/apply_new_window_group.sh"
 PLUGIN_TMUX="$PROJECT_ROOT/tabby.tmux"
 
 check_bootstrap() {
@@ -51,6 +52,29 @@ check_bootstrap "$STABILIZE_SCRIPT" "stabilize_client_resize.sh"
 check_bootstrap "$TOGGLE_SCRIPT" "toggle_sidebar.sh"
 check_bootstrap "$TOGGLE_DAEMON_SCRIPT" "toggle_sidebar_daemon.sh"
 check_bootstrap "$NEW_WINDOW_SCRIPT" "new_window_with_group.sh"
+check_bootstrap "$APPLY_GROUP_SCRIPT" "apply_new_window_group.sh"
+
+if [ -x "$APPLY_GROUP_SCRIPT" ]; then
+  echo "✓ apply_new_window_group.sh is packaged as an executable script"
+else
+  echo "✗ apply_new_window_group.sh missing or not executable"
+  exit 1
+fi
+
+if git -C "$PROJECT_ROOT" check-ignore -q scripts/apply_new_window_group.sh; then
+  echo "✗ apply_new_window_group.sh is ignored and can be omitted from releases"
+  exit 1
+else
+  echo "✓ apply_new_window_group.sh is not ignored by git"
+fi
+
+if git -C "$PROJECT_ROOT" ls-files --error-unmatch scripts/apply_new_window_group.sh >/dev/null 2>&1 || \
+   git -C "$PROJECT_ROOT" ls-files --others --exclude-standard | grep -qx 'scripts/apply_new_window_group.sh'; then
+  echo "✓ apply_new_window_group.sh is tracked or addable for release archives"
+else
+  echo "✗ apply_new_window_group.sh is not tracked or addable for release archives"
+  exit 1
+fi
 
 if grep -Fq 'CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"' "$NEW_WINDOW_SCRIPT"; then
   echo "✓ new_window_with_group.sh resolves CURRENT_DIR at runtime"
@@ -63,6 +87,28 @@ if grep -Fq 'CURRENT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"' 
   echo "✓ tabby.tmux generates new_window_with_group.sh with runtime CURRENT_DIR"
 else
   echo "✗ tabby.tmux new-window template expands CURRENT_DIR while sourcing"
+  exit 1
+fi
+
+if grep -Fq 'cat > "$APPLY_GROUP_SCRIPT"' "$PLUGIN_TMUX"; then
+  echo "✗ tabby.tmux still generates apply_new_window_group.sh instead of packaging it"
+  exit 1
+else
+  echo "✓ tabby.tmux does not generate apply_new_window_group.sh at runtime"
+fi
+
+if grep -Fq 'if [ -x \"$APPLY_GROUP_SCRIPT\" ]; then \"$APPLY_GROUP_SCRIPT\" \"#{window_id}\"; fi' "$PLUGIN_TMUX"; then
+  echo "✓ after-new-window hook guards apply_new_window_group.sh"
+else
+  echo "✗ after-new-window hook does not guard apply_new_window_group.sh"
+  exit 1
+fi
+
+if grep -Fq 'tabby_config_value "swap_pane"' "$PLUGIN_TMUX" && \
+   ! grep -Eq 'grep "(toggle_sidebar|next_window_global|prev_window_global|new_window_global|kill_window_global|swap_pane|swap_window_next|swap_window_prev):"' "$PLUGIN_TMUX"; then
+  echo "✓ key binding config reads ignore comments"
+else
+  echo "✗ key binding config reads can parse commented bindings"
   exit 1
 fi
 

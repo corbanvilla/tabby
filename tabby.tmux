@@ -637,19 +637,8 @@ chmod +x "$STATUS_GUARD_SCRIPT"
 FOCUS_RECOVERY_SCRIPT="$CURRENT_DIR/scripts/restore_input_focus.sh"
 chmod +x "$FOCUS_RECOVERY_SCRIPT"
 
-# Create script to apply saved group to new window
 APPLY_GROUP_SCRIPT="$CURRENT_DIR/scripts/apply_new_window_group.sh"
-cat > "$APPLY_GROUP_SCRIPT" << 'SCRIPT_EOF'
-#!/usr/bin/env bash
-# Apply saved group to newly created window
-SAVED_GROUP=$(tmux show-option -gqv @tabby_new_window_group 2>/dev/null || echo "")
-NEW_WINDOW_ID=$(tmux show-option -gqv @tabby_new_window_id 2>/dev/null || echo "")
-if [ -n "$SAVED_GROUP" ] && [ -n "$NEW_WINDOW_ID" ]; then
-    tmux set-window-option -t "$NEW_WINDOW_ID" @tabby_group "$SAVED_GROUP" 2>/dev/null || true
-fi
-tmux set-option -gu @tabby_new_window_group 2>/dev/null || true
-SCRIPT_EOF
-chmod +x "$APPLY_GROUP_SCRIPT"
+chmod +x "$APPLY_GROUP_SCRIPT" 2>/dev/null || true
 
 # Window history tracking for proper focus restoration on window close
 TRACK_WINDOW_HISTORY_SCRIPT="$CURRENT_DIR/scripts/track_window_history.sh"
@@ -681,7 +670,7 @@ tmux set-hook -g window-unlinked "run-shell '$SELECT_PREVIOUS_WINDOW_SCRIPT \"#{
 # single USR1 signal to the daemon (which spawns the renderer).  We do NOT
 # also call signal_sidebar here — that would send a duplicate USR1 before
 # ensure_sidebar's own signal, causing the sidebar to "juggle" visually.
-tmux set-hook -g after-new-window "run-shell '$APPLY_GROUP_SCRIPT'; run-shell '$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\"'; run-shell '$REFRESH_STATUS_SCRIPT'; run-shell '$STATUS_GUARD_SCRIPT \"#{session_id}\"'"
+tmux set-hook -g after-new-window "run-shell 'if [ -x \"$APPLY_GROUP_SCRIPT\" ]; then \"$APPLY_GROUP_SCRIPT\" \"#{window_id}\"; fi'; run-shell '$ENSURE_SIDEBAR_SCRIPT \"#{session_id}\" \"#{window_id}\"'; run-shell '$REFRESH_STATUS_SCRIPT'; run-shell '$STATUS_GUARD_SCRIPT \"#{session_id}\"'"
 # Combined script to reduce latency + track window history
 ON_WINDOW_SELECT_SCRIPT="$CURRENT_DIR/scripts/on_window_select.sh"
 chmod +x "$ON_WINDOW_SELECT_SCRIPT"
@@ -874,8 +863,27 @@ fi
 tmux bind-key w choose-tree -Zw
 tmux bind-key s choose-tree -Zs
 
+tabby_config_value() {
+	local key="$1"
+	awk -v key="$key" '
+		/^[[:space:]]*#/ { next }
+		{
+			line = $0
+			if (line ~ "^[[:space:]]*" key "[[:space:]]*:") {
+				sub("^[[:space:]]*" key "[[:space:]]*:[[:space:]]*", "", line)
+				sub(/[[:space:]]+#.*$/, "", line)
+				gsub(/^"/, "", line)
+				gsub(/"$/, "", line)
+				print line
+				exit
+			}
+		}
+	' "$CONFIG_FILE" 2>/dev/null || true
+}
+
 # Configure sidebar toggle keybinding
-TOGGLE_KEY=$(grep "toggle_sidebar:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/"//g' || echo "prefix + Tab")
+TOGGLE_KEY=$(tabby_config_value "toggle_sidebar")
+[ -n "$TOGGLE_KEY" ] || TOGGLE_KEY="prefix + Tab"
 KEY=${TOGGLE_KEY##*+ }
 if [ -z "$KEY" ]; then KEY="Tab"; fi
 
@@ -922,17 +930,17 @@ bind_from_config() {
 	[ -n "$key" ] && tmux bind-key -n "$key" "$command"
 }
 
-NEXT_WINDOW_BINDING=$(grep "next_window_global:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/"//g' || echo "")
-PREV_WINDOW_BINDING=$(grep "prev_window_global:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/"//g' || echo "")
+NEXT_WINDOW_BINDING=$(tabby_config_value "next_window_global")
+PREV_WINDOW_BINDING=$(tabby_config_value "prev_window_global")
 if [ -z "$NEXT_WINDOW_BINDING" ]; then
-	NEXT_WINDOW_BINDING=$(grep "next_window:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/"//g' || echo "")
+	NEXT_WINDOW_BINDING=$(tabby_config_value "next_window")
 fi
 if [ -z "$PREV_WINDOW_BINDING" ]; then
-	PREV_WINDOW_BINDING=$(grep "prev_window:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/"//g' || echo "")
+	PREV_WINDOW_BINDING=$(tabby_config_value "prev_window")
 fi
 
-NEW_WINDOW_BINDING=$(grep "new_window_global:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/"//g' || echo "")
-KILL_WINDOW_BINDING=$(grep "kill_window_global:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/"//g' || echo "")
+NEW_WINDOW_BINDING=$(tabby_config_value "new_window_global")
+KILL_WINDOW_BINDING=$(tabby_config_value "kill_window_global")
 
 bind_from_config "$NEXT_WINDOW_BINDING" "next-window"
 bind_from_config "$PREV_WINDOW_BINDING" "previous-window"
@@ -941,7 +949,7 @@ bind_from_config "$KILL_WINDOW_BINDING" "run-shell '$KILL_WINDOW_SCRIPT #{window
 
 # Swap/cycle active pane within current window (skips utility panes, signals daemon)
 # Uses Go binary: bin/cycle-pane (also handles dimming)
-SWAP_PANE_BINDING=$(grep "swap_pane:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/"//g' || echo "")
+SWAP_PANE_BINDING=$(tabby_config_value "swap_pane")
 if [ -n "$SWAP_PANE_BINDING" ] && [ -x "$CYCLE_PANE_BIN" ]; then
     SWAP_KEY=$(normalize_global_key "$SWAP_PANE_BINDING")
     [ -n "$SWAP_KEY" ] && tmux bind-key -n "$SWAP_KEY" run-shell "$CYCLE_PANE_BIN"
@@ -949,8 +957,8 @@ fi
 
 SWAP_WINDOW_SCRIPT="$CURRENT_DIR/scripts/swap_window.sh"
 chmod +x "$SWAP_WINDOW_SCRIPT"
-SWAP_WINDOW_NEXT_BINDING=$(grep "swap_window_next:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/\"//g' || echo "")
-SWAP_WINDOW_PREV_BINDING=$(grep "swap_window_prev:" "$CONFIG_FILE" 2>/dev/null | awk -F': ' '{print $2}' | sed 's/\"//g' || echo "")
+SWAP_WINDOW_NEXT_BINDING=$(tabby_config_value "swap_window_next")
+SWAP_WINDOW_PREV_BINDING=$(tabby_config_value "swap_window_prev")
 bind_from_config "$SWAP_WINDOW_NEXT_BINDING" "run-shell '$SWAP_WINDOW_SCRIPT :+1 #{window_id} #{session_id}'"
 bind_from_config "$SWAP_WINDOW_PREV_BINDING" "run-shell '$SWAP_WINDOW_SCRIPT :-1 #{window_id} #{session_id}'"
 

@@ -81,6 +81,3 @@ tmux-*.log
 log.txt
 Untitled
 todos.md
-
-# Runtime-generated helper scripts
-scripts/apply_new_window_group.sh
